@@ -1,0 +1,13 @@
+# Hasła i dane logowania
+.env
+
+# Środowisko wirtualne (nie wrzucamy go do gita)
+venv/
+.venv/
+
+# Pliki tymczasowe Pythona
+__pycache__/
+*.pyc
+
+# Baza danych z treningami (Twoje prywatne dane)
+*.db
