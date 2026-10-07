@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import sqlite3
 from contextlib import closing
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import altair as alt  # NOWE: biblioteka do wykresów (jest razem ze Streamlitem)
+import altair as alt
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
@@ -29,53 +29,101 @@ SCIEZKA_BAZY = Path(__file__).parent / "treningi.db"
 # Lista rodzajów treningu do rozwijanej listy
 RODZAJE_TRENINGU = ["Dół 1", "Dół 2", "Góra 1", "Góra 2", "Siatkówka/Padel"]
 
+# NOWE: początkowa baza ćwiczeń (na razie zwykła lista, później ją rozwiniemy)
+BAZA_CWICZEN = [
+    "Przysiad ze sztangą",
+    "RDL",
+    "Przysiad bułgarski",
+    "Wyciskanie sztangi",
+    "Podciąganie",
+]
+
 # Ile dni wstecz uzupełniać z Garmina (gdy jeszcze ich nie mamy w bazie)
 LICZBA_DNI_WSTECZ = 6
 
 # Od ilu dni z wpisaną wagą pokazujemy wykres wagi
 MIN_DNI_WAGI = 3
 
-# NOWE: zielone pole na wykresie snu (dobry i doskonały sen wg skali Garmina)
+# Zielone pole na wykresie snu (dobry i doskonały sen wg skali Garmina)
 SEN_PASMO = (80, 100)
 
-# NOWE: od ilu dni danych liczymy Twój własny zakres dla HRV i RHR
+# Od ilu dni danych liczymy Twój własny zakres dla HRV i RHR
 MIN_DNI_DLA_PASMA = 5
+
+# NOWE: nowe kolumny w tabeli treningi (nazwa -> typ w SQLite)
+NOWE_KOLUMNY = {
+    "Nazwa_cwiczenia": "TEXT",
+    "Ciezar": "REAL",
+    "Serie": "INTEGER",
+    "Powtorzenia": "INTEGER",
+}
 
 
 # ---------------------------------------------------------------
 # BAZA DANYCH
 # ---------------------------------------------------------------
-def przygotuj_baze() -> None:
-    """Tworzy plik treningi.db i tabele, jeśli jeszcze nie istnieją."""
-    with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS treningi (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                Data TEXT NOT NULL,
-                Wynik_snu INTEGER,
-                Czas_snu INTEGER,          -- w minutach
-                RHR INTEGER,
-                Waga REAL,
-                Rodzaj_treningu TEXT,
-                Wynik_cwiczenia TEXT,
-                Komentarz TEXT
-            )
-            """
+def utworz_tabele(db: sqlite3.Connection) -> None:
+    """Tworzy tabele (jeśli nie istnieją) w nowej strukturze."""
+    # NOWE: zamiast Wynik_cwiczenia mamy cztery osobne kolumny
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS treningi (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Data TEXT NOT NULL,
+            Wynik_snu INTEGER,
+            Czas_snu INTEGER,          -- w minutach
+            RHR INTEGER,
+            Waga REAL,
+            Rodzaj_treningu TEXT,
+            Nazwa_cwiczenia TEXT,
+            Ciezar REAL,
+            Serie INTEGER,
+            Powtorzenia INTEGER,
+            Komentarz TEXT
         )
-        # Osobna tabela na dane z Garmina, jeden wiersz na dzień
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS garmin_dziennie (
-                Data TEXT PRIMARY KEY,
-                Wynik_snu INTEGER,
-                Czas_snu INTEGER,          -- w minutach
-                RHR INTEGER,
-                HRV INTEGER
-            )
-            """
+        """
+    )
+    # Osobna tabela na dane z Garmina, jeden wiersz na dzień
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS garmin_dziennie (
+            Data TEXT PRIMARY KEY,
+            Wynik_snu INTEGER,
+            Czas_snu INTEGER,          -- w minutach
+            RHR INTEGER,
+            HRV INTEGER
         )
-        db.commit()
+        """
+    )
+    db.commit()
+
+
+def migruj_tabele(db: sqlite3.Connection) -> None:
+    """NOWE: dodaje brakujące kolumny do starej tabeli, nie ruszając istniejących danych."""
+    # PRAGMA table_info zwraca listę kolumn, które tabela ma teraz
+    istniejace = {wiersz[1] for wiersz in db.execute("PRAGMA table_info(treningi)")}
+    for nazwa, typ in NOWE_KOLUMNY.items():
+        if nazwa not in istniejace:
+            db.execute(f"ALTER TABLE treningi ADD COLUMN {nazwa} {typ}")
+    db.commit()
+
+
+def przygotuj_baze() -> str | None:
+    """Przygotowuje bazę. Zwraca tekst komunikatu, jeśli trzeba było odtworzyć plik."""
+    try:
+        with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
+            utworz_tabele(db)
+            migruj_tabele(db)
+        return None
+    except sqlite3.Error:
+        # NOWE: w razie błędu odczytu zachowujemy stary plik jako kopię (nie kasujemy go!)
+        znacznik = datetime.now().strftime("%Y%m%d_%H%M%S")
+        kopia = SCIEZKA_BAZY.with_name(f"treningi_kopia_{znacznik}.db")
+        SCIEZKA_BAZY.replace(kopia)
+        # i tworzymy świeżą bazę z nowymi kolumnami
+        with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
+            utworz_tabele(db)
+        return f"Nie udało się odczytać bazy, więc stworzyłem nową. Stary plik zapisałem jako {kopia.name}."
 
 
 def zapisz_trening(
@@ -83,7 +131,10 @@ def zapisz_trening(
     dane_garmin: dict | None,
     waga: float,
     rodzaj: str,
-    wynik: str,
+    cwiczenie: str,
+    ciezar: float,
+    serie: int,
+    powtorzenia: int,
     komentarz: str,
 ) -> None:
     """Dodaje jeden nowy wiersz do tabeli treningi."""
@@ -92,11 +143,13 @@ def zapisz_trening(
     czas_snu_min = round(czas_snu_s / 60) if czas_snu_s is not None else None
 
     with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
+        # NOWE: zapisujemy nazwę ćwiczenia, ciężar, serie i powtórzenia osobno
         db.execute(
             """
             INSERT INTO treningi
-                (Data, Wynik_snu, Czas_snu, RHR, Waga, Rodzaj_treningu, Wynik_cwiczenia, Komentarz)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (Data, Wynik_snu, Czas_snu, RHR, Waga, Rodzaj_treningu,
+                 Nazwa_cwiczenia, Ciezar, Serie, Powtorzenia, Komentarz)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 dzien,
@@ -105,7 +158,10 @@ def zapisz_trening(
                 garmin.get("rhr"),
                 waga,
                 rodzaj,
-                wynik,
+                cwiczenie,
+                ciezar,
+                serie,
+                powtorzenia,
                 komentarz,
             ),
         )
@@ -115,11 +171,19 @@ def zapisz_trening(
 def wczytaj_historie() -> pd.DataFrame:
     """Czyta wszystkie treningi z bazy (najnowsze na górze) jako tabelę pandas."""
     with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
-        return pd.read_sql_query(
-            "SELECT Data, Wynik_snu, Czas_snu, RHR, Waga, Rodzaj_treningu, "
-            "Wynik_cwiczenia, Komentarz FROM treningi ORDER BY Data DESC, id DESC",
-            db,
+        dane = pd.read_sql_query(
+            "SELECT * FROM treningi ORDER BY Data DESC, id DESC", db
         )
+
+    # NOWE: kolumny w ładnej kolejności; bierzemy tylko te, które istnieją
+    kolejnosc = [
+        "Data", "Rodzaj_treningu", "Nazwa_cwiczenia", "Ciezar", "Serie",
+        "Powtorzenia", "Waga", "Wynik_snu", "Czas_snu", "RHR", "Komentarz",
+    ]
+    # Stara kolumna z wynikiem tekstowym: pokazujemy ją tylko, jeśli są w niej stare wpisy
+    if "Wynik_cwiczenia" in dane.columns and dane["Wynik_cwiczenia"].notna().any():
+        kolejnosc.append("Wynik_cwiczenia")
+    return dane[[k for k in kolejnosc if k in dane.columns]]
 
 
 def zapisz_dzien_garmin(dzien: str, dane: dict) -> None:
@@ -176,12 +240,12 @@ def wczytaj_wage_do_wykresu() -> pd.DataFrame:
     return dane.groupby("Data").mean(numeric_only=True).sort_index()
 
 
-# Uruchamiamy przy każdym starcie skryptu; jeśli baza już jest, nic się nie dzieje
-przygotuj_baze()
+# Uruchamiamy przy każdym starcie skryptu; zwraca komunikat tylko, gdy baza była odtworzona
+komunikat_bazy = przygotuj_baze()
 
 
 # ---------------------------------------------------------------
-# NOWE: WYKRESY (statyczne, bez zoomu)
+# WYKRESY (statyczne, bez zoomu)
 # ---------------------------------------------------------------
 def pasmo_osobiste(serie: pd.Series) -> tuple[float, float] | None:
     """Zwraca Twój własny zakres (średnia ± odchylenie standardowe) albo None, gdy za mało danych."""
@@ -306,152 +370,178 @@ st.title(f"🏐 {NAZWA_APLIKACJI}")
 dzisiaj = date.today().isoformat()  # format RRRR-MM-DD
 st.caption(f"Dziś: {date.today().strftime('%d.%m.%Y')}")
 
-# ---------------------------------------------------------------
-# SEKCJA 1: STATYSTYKI Z GARMINA
-# ---------------------------------------------------------------
-st.subheader("Dane z Garmina")
-
-if st.button("🔄 Odśwież dane z Garmina"):
-    st.cache_data.clear()
-
-# Domyślnie brak danych; jeśli pobieranie się uda, podmienimy to na słownik z wynikami
+# NOWE: synchronizację z Garminem robimy RAZ, przed zakładkami, bo dane
+# są potrzebne zarówno na Pulpicie, jak i w formularzu treningu
 dane_garmin: dict | None = None
+blad_garmin: tuple[str, str] | None = None  # (rodzaj komunikatu, tekst)
 
 try:
     dane_garmin = synchronizuj_garmin(dzisiaj)
-
-    kol_sen, kol_czas, kol_rhr, kol_hrv = st.columns(4)
-    kol_sen.metric(
-        "Wynik snu",
-        dane_garmin["wynik_snu"] if dane_garmin["wynik_snu"] is not None else "brak",
-    )
-    kol_czas.metric("Czas snu", formatuj_czas(dane_garmin["czas_snu"]))
-    kol_rhr.metric(
-        "RHR",
-        f"{dane_garmin['rhr']} bpm" if dane_garmin["rhr"] is not None else "brak",
-    )
-    kol_hrv.metric(
-        "HRV",
-        f"{dane_garmin['hrv']} ms" if dane_garmin["hrv"] is not None else "brak",
-    )
-
 except ValueError as blad:
-    st.error(f"Błąd konfiguracji: {blad}")
+    blad_garmin = ("error", f"Błąd konfiguracji: {blad}")
 except GarminConnectAuthenticationError:
-    st.error("Błąd logowania: sprawdź email i hasło w pliku .env.")
+    blad_garmin = ("error", "Błąd logowania: sprawdź email i hasło w pliku .env.")
 except GarminConnectTooManyRequestsError:
-    st.warning("Garmin ogranicza liczbę zapytań. Odczekaj kilka minut i kliknij Odśwież.")
+    blad_garmin = ("warning", "Garmin ogranicza liczbę zapytań. Odczekaj kilka minut i kliknij Odśwież.")
 except GarminConnectConnectionError as blad:
-    st.error(f"Błąd połączenia z Garmin Connect: {blad}")
+    blad_garmin = ("error", f"Błąd połączenia z Garmin Connect: {blad}")
 except Exception as blad:
-    st.error(f"Nieoczekiwany błąd: {blad}")
-
-st.divider()
+    blad_garmin = ("error", f"Nieoczekiwany błąd: {blad}")
 
 # ---------------------------------------------------------------
-# SEKCJA 2: FORMULARZ TRENINGOWY
+# NOWE: NAWIGACJA, czyli poziomy pasek zakładek na górze strony
 # ---------------------------------------------------------------
-st.subheader("Dodaj trening")
-
-with st.form("formularz_treningu"):
-    waga = st.number_input(
-        "Dzisiejsza waga ciała (kg)",
-        min_value=30.0,
-        max_value=200.0,
-        value=80.0,
-        step=0.1,
-        format="%.1f",
-    )
-    rodzaj = st.selectbox("Rodzaj treningu", RODZAJE_TRENINGU)
-    wynik = st.text_input(
-        "Wynik w głównym ćwiczeniu",
-        placeholder="np. Przysiad 80 kg x 5 w 4 seriach",
-    )
-    komentarz = st.text_area(
-        "Komentarz / samopoczucie / RPE",
-        placeholder="Jak się czułeś? Ocena trudności (RPE 1-10)?",
-        height=120,
-    )
-
-    zapisz = st.form_submit_button("💾 Zapisz Trening")
-
-# Ten blok wykona się po kliknięciu "Zapisz Trening"
-if zapisz:
-    zapisz_trening(dzisiaj, dane_garmin, waga, rodzaj, wynik, komentarz)
-    st.success(
-        f"**Trening zapisany w bazie!**\n\n"
-        f"- **Data:** {date.today().strftime('%d.%m.%Y')}\n"
-        f"- **Waga:** {waga:.1f} kg\n"
-        f"- **Rodzaj treningu:** {rodzaj}\n"
-        f"- **Główne ćwiczenie:** {wynik or '—'}\n"
-        f"- **Komentarz / RPE:** {komentarz or '—'}"
-    )
-    if dane_garmin is None:
-        st.warning("Dane z Garmina nie były dostępne, więc kolumny snu i RHR zostały puste.")
-
-st.divider()
+zakladka_start, zakladka_regeneracja, zakladka_trening, zakladka_historia = st.tabs(
+    ["Start (Pulpit)", "Regeneracja", "Trening", "Historia i Kalendarz"]
+)
 
 # ---------------------------------------------------------------
-# SEKCJA 3: MOJE POSTĘPY (WYKRESY)
+# NOWE — ZAKŁADKA 1: START (PULPIT)
 # ---------------------------------------------------------------
-st.header("Moje Postępy")
+with zakladka_start:
+    st.subheader("Jak się dziś masz?")
 
-st.subheader("Regeneracja (dane z Garmina)")
-dane_garmin_wykresy = wczytaj_dane_garmin_do_wykresow()
+    # Informacja, jeśli baza musiała zostać odtworzona
+    if komunikat_bazy:
+        st.warning(komunikat_bazy)
 
-if len(dane_garmin_wykresy) < 2:
-    st.info("Wykresy regeneracji pojawią się, gdy w bazie będą dane z co najmniej dwóch dni.")
-else:
-    # NOWE: wykres snu ze stałym zielonym polem
-    st.caption("Wynik snu (zielone pole: dobry i doskonały sen)")
-    rysuj_wykres(dane_garmin_wykresy, "Wynik_snu", "Wynik snu", "punkty", pasmo=SEN_PASMO)
+    # Błędy Garmina pokazujemy tutaj
+    if blad_garmin is not None:
+        if blad_garmin[0] == "warning":
+            st.warning(blad_garmin[1])
+        else:
+            st.error(blad_garmin[1])
 
-    # NOWE: RHR z Twoim własnym zakresem
-    st.caption("Tętno spoczynkowe, RHR (zielone pole: Twój zwykły zakres)")
-    rysuj_wykres(
-        dane_garmin_wykresy, "RHR", "RHR", "bpm",
-        pasmo=pasmo_osobiste(dane_garmin_wykresy["RHR"]),
-    )
+    # Cztery kafelki z samymi liczbami
+    if dane_garmin is not None:
+        kol_sen, kol_czas, kol_rhr, kol_hrv = st.columns(4)
+        kol_sen.metric(
+            "Wynik snu",
+            dane_garmin["wynik_snu"] if dane_garmin["wynik_snu"] is not None else "brak",
+        )
+        kol_czas.metric("Czas snu", formatuj_czas(dane_garmin["czas_snu"]))
+        kol_rhr.metric(
+            "RHR",
+            f"{dane_garmin['rhr']} bpm" if dane_garmin["rhr"] is not None else "brak",
+        )
+        kol_hrv.metric(
+            "HRV",
+            f"{dane_garmin['hrv']} ms" if dane_garmin["hrv"] is not None else "brak",
+        )
 
-    # HRV rysujemy tylko, jeśli Garmin w ogóle zwrócił jakiekolwiek wartości
-    if dane_garmin_wykresy["HRV"].notna().any():
-        st.caption("HRV (zielone pole: Twój zwykły zakres)")
+    # on_click czyści cache jeszcze przed ponownym uruchomieniem skryptu,
+    # więc synchronizacja na górze pliku pobierze świeże dane
+    st.button("🔄 Odśwież dane z Garmina", on_click=st.cache_data.clear)
+
+# ---------------------------------------------------------------
+# NOWE — ZAKŁADKA 2: REGENERACJA (wszystkie wykresy)
+# ---------------------------------------------------------------
+with zakladka_regeneracja:
+    st.subheader("Regeneracja (dane z Garmina)")
+    dane_garmin_wykresy = wczytaj_dane_garmin_do_wykresow()
+
+    if len(dane_garmin_wykresy) < 2:
+        st.info("Wykresy regeneracji pojawią się, gdy w bazie będą dane z co najmniej dwóch dni.")
+    else:
+        st.caption("Wynik snu (zielone pole: dobry i doskonały sen)")
+        rysuj_wykres(dane_garmin_wykresy, "Wynik_snu", "Wynik snu", "punkty", pasmo=SEN_PASMO)
+
+        st.caption("Tętno spoczynkowe, RHR (zielone pole: Twój zwykły zakres)")
         rysuj_wykres(
-            dane_garmin_wykresy, "HRV", "HRV", "ms",
-            pasmo=pasmo_osobiste(dane_garmin_wykresy["HRV"]),
+            dane_garmin_wykresy, "RHR", "RHR", "bpm",
+            pasmo=pasmo_osobiste(dane_garmin_wykresy["RHR"]),
+        )
+
+        # HRV rysujemy tylko, jeśli Garmin w ogóle zwrócił jakiekolwiek wartości
+        if dane_garmin_wykresy["HRV"].notna().any():
+            st.caption("HRV (zielone pole: Twój zwykły zakres)")
+            rysuj_wykres(
+                dane_garmin_wykresy, "HRV", "HRV", "ms",
+                pasmo=pasmo_osobiste(dane_garmin_wykresy["HRV"]),
+            )
+        else:
+            st.info("Brak danych HRV z Garmina, więc wykres HRV się nie pokazuje.")
+
+        st.caption(
+            f"Zielone pole dla RHR i HRV to Twoja średnia ± odchylenie standardowe "
+            f"(pojawia się od {MIN_DNI_DLA_PASMA} dni danych). Dla RHR niżej zwykle znaczy lepiej."
+        )
+
+    # Wykres wagi zależy od ręcznych wpisów
+    st.subheader("Waga ciała (kg)")
+    dane_wagi = wczytaj_wage_do_wykresu()
+
+    if len(dane_wagi) < MIN_DNI_WAGI:
+        st.info(
+            f"Wykres wagi pojawi się, gdy wpiszesz wagę w co najmniej {MIN_DNI_WAGI} różnych "
+            f"dniach (na razie: {len(dane_wagi)})."
         )
     else:
-        st.info("Brak danych HRV z Garmina, więc wykres HRV się nie pokazuje.")
-
-    # NOWE: wyjaśnienie, skąd bierze się zielone pole
-    st.caption(
-        f"Zielone pole dla RHR i HRV to Twoja średnia ± odchylenie standardowe "
-        f"(pojawia się od {MIN_DNI_DLA_PASMA} dni danych). Dla RHR niżej zwykle znaczy lepiej."
-    )
-
-# Wykres wagi zależy od ręcznych wpisów
-st.subheader("Waga ciała (kg)")
-dane_wagi = wczytaj_wage_do_wykresu()
-
-if len(dane_wagi) < MIN_DNI_WAGI:
-    st.info(
-        f"Wykres wagi pojawi się, gdy wpiszesz wagę w co najmniej {MIN_DNI_WAGI} różnych "
-        f"dniach (na razie: {len(dane_wagi)})."
-    )
-else:
-    # NOWE: statyczny wykres wagi (bez zielonego pola)
-    rysuj_wykres(dane_wagi, "Waga", "Waga", "kg")
-
-st.divider()
+        rysuj_wykres(dane_wagi, "Waga", "Waga", "kg")
 
 # ---------------------------------------------------------------
-# SEKCJA 4: HISTORIA TRENINGÓW
+# NOWE — ZAKŁADKA 3: TRENING (formularz z bazą ćwiczeń)
 # ---------------------------------------------------------------
-st.header("Historia Treningów")
+with zakladka_trening:
+    st.subheader("Dodaj trening")
 
-historia = wczytaj_historie()
+    # st.form zbiera pola i wysyła je dopiero po kliknięciu przycisku
+    with st.form("formularz_treningu"):
+        waga = st.number_input(
+            "Dzisiejsza waga ciała (kg)",
+            min_value=30.0,
+            max_value=200.0,
+            value=80.0,
+            step=0.1,
+            format="%.1f",
+        )
+        rodzaj = st.selectbox("Rodzaj treningu", RODZAJE_TRENINGU)
 
-if historia.empty:
-    st.info("Brak zapisanych treningów. Dodaj pierwszy w formularzu powyżej.")
-else:
-    st.dataframe(historia, use_container_width=True, hide_index=True)
+        st.markdown("**Główne ćwiczenie**")
+        # NOWE: wybór ćwiczenia z bazy, a pod spodem trzy pola liczbowe
+        cwiczenie = st.selectbox("Ćwiczenie", BAZA_CWICZEN)
+
+        kol_ciezar, kol_serie, kol_powt = st.columns(3)
+        ciezar = kol_ciezar.number_input(
+            "Ciężar (kg)", min_value=0.0, max_value=500.0, value=60.0, step=2.5, format="%.1f"
+        )
+        serie = kol_serie.number_input("Serie", min_value=1, max_value=20, value=4, step=1)
+        powtorzenia = kol_powt.number_input("Powtórzenia", min_value=1, max_value=100, value=5, step=1)
+
+        komentarz = st.text_area(
+            "Komentarz / samopoczucie / RPE",
+            placeholder="Jak się czułeś? Ocena trudności (RPE 1-10)?",
+            height=120,
+        )
+
+        zapisz = st.form_submit_button("💾 Zapisz Trening")
+
+    # Ten blok wykona się po kliknięciu "Zapisz Trening"
+    if zapisz:
+        zapisz_trening(
+            dzisiaj, dane_garmin, waga, rodzaj,
+            cwiczenie, ciezar, int(serie), int(powtorzenia), komentarz,
+        )
+        st.success(
+            f"**Trening zapisany w bazie!**\n\n"
+            f"- **Data:** {date.today().strftime('%d.%m.%Y')}\n"
+            f"- **Waga:** {waga:.1f} kg\n"
+            f"- **Rodzaj treningu:** {rodzaj}\n"
+            f"- **Ćwiczenie:** {cwiczenie}: {ciezar:g} kg x {int(powtorzenia)} powt. w {int(serie)} seriach\n"
+            f"- **Komentarz / RPE:** {komentarz or '—'}"
+        )
+        if dane_garmin is None:
+            st.warning("Dane z Garmina nie były dostępne, więc kolumny snu i RHR zostały puste.")
+
+# ---------------------------------------------------------------
+# NOWE — ZAKŁADKA 4: HISTORIA I KALENDARZ
+# ---------------------------------------------------------------
+with zakladka_historia:
+    st.subheader("Historia Treningów")
+
+    historia = wczytaj_historie()
+
+    if historia.empty:
+        st.info("Brak zapisanych treningów. Dodaj pierwszy w zakładce Trening.")
+    else:
+        st.dataframe(historia, use_container_width=True, hide_index=True)
