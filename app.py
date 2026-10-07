@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -29,8 +30,13 @@ from wykresy import MIN_DNI_DLA_PASMA, SEN_PASMO, pasmo_osobiste, rysuj_wykres
 load_dotenv()
 
 NAZWA_APLIKACJI = "NextLvl Training"
-st.set_page_config(page_title=NAZWA_APLIKACJI, page_icon="🏋️", layout="wide")
+st.set_page_config(
+    page_title=NAZWA_APLIKACJI, page_icon="🏋️", layout="wide",
+    initial_sidebar_state="expanded",
+)
 zastosuj_styl()
+# Logo nad menu bocznym (plik logo.svg leży obok app.py)
+st.logo(str(Path(__file__).parent / "logo.svg"), size="large")
 
 # Od ilu dni z wpisaną wagą pokazujemy wykres wagi
 MIN_DNI_WAGI = 3
@@ -105,37 +111,39 @@ def zapisz_z_formularza() -> None:
 # ---------------------------------------------------------------
 
 dzisiaj = date.today().isoformat()  # format RRRR-MM-DD
-naglowek(NAZWA_APLIKACJI, f"Dziś: {date.today().strftime('%d.%m.%Y')}")
 
 # Synchronizację z Garminem robimy RAZ, przed zakładkami, bo dane
 # są potrzebne zarówno na Pulpicie, jak i w formularzu treningu
-dane_garmin: dict | None = None
-blad_garmin: tuple[str, str] | None = None  # (rodzaj komunikatu, tekst)
-
-try:
-    dane_garmin = synchronizuj_garmin(dzisiaj)
-except ValueError as blad:
-    blad_garmin = ("error", f"Błąd konfiguracji: {blad}")
-except GarminConnectAuthenticationError:
-    blad_garmin = ("error", "Błąd logowania: sprawdź email i hasło w pliku .env.")
-except GarminConnectTooManyRequestsError:
-    blad_garmin = ("warning", "Garmin ogranicza liczbę zapytań. Odczekaj kilka minut i kliknij Odśwież.")
-except GarminConnectConnectionError as blad:
-    blad_garmin = ("error", f"Błąd połączenia z Garmin Connect: {blad}")
-except Exception as blad:
-    blad_garmin = ("error", f"Nieoczekiwany błąd: {blad}")
+def pobierz_dane_garmin() -> tuple[dict | None, tuple[str, str] | None]:
+    """Zwraca (dane, błąd). Wywoływana tylko na stronie Start, więc reszta aplikacji nie czeka."""
+    try:
+        return synchronizuj_garmin(dzisiaj), None
+    except ValueError as blad:
+        return None, ("error", f"Błąd konfiguracji: {blad}")
+    except GarminConnectAuthenticationError:
+        return None, ("error", "Błąd logowania: sprawdź email i hasło w pliku .env.")
+    except GarminConnectTooManyRequestsError:
+        return None, ("warning", "Garmin ogranicza liczbę zapytań. Odczekaj kilka minut i kliknij Odśwież.")
+    except GarminConnectConnectionError as blad:
+        return None, ("error", f"Błąd połączenia z Garmin Connect: {blad}")
+    except Exception as blad:
+        return None, ("error", f"Nieoczekiwany błąd: {blad}")
 
 # ---------------------------------------------------------------
 # NAWIGACJA: poziomy pasek zakładek na górze strony
 # ---------------------------------------------------------------
-zakladka_start, zakladka_regeneracja, zakladka_trening, zakladka_historia = st.tabs(
-    ["Start", "Regeneracja", "Trening", "Historia i Kalendarz"]
-)
 
 # ---------------------------------------------------------------
 # ZAKŁADKA 1: START (PULPIT)
 # ---------------------------------------------------------------
-with zakladka_start:
+def strona_start():
+    st.title("Start")
+    st.caption(f"Dziś: {date.today().strftime('%d.%m.%Y')}")
+        # Zwykły napis zamiast czarnego spinnera; znika, gdy dane są gotowe
+    info = st.empty()
+    info.caption("⏳ Synchronizuję dane z Garmina... (przy limicie 429 może to potrwać do minuty)")
+    dane_garmin, blad_garmin = pobierz_dane_garmin()
+    info.empty()
     st.subheader("Jak się dziś masz?")
 
     # Informacja, jeśli baza musiała zostać odtworzona
@@ -166,14 +174,11 @@ with zakladka_start:
             f"{dane_garmin['hrv']} ms" if dane_garmin["hrv"] is not None else "brak",
         )
 
-    # on_click czyści cache jeszcze przed ponownym uruchomieniem skryptu,
-    # więc synchronizacja na górze pliku pobierze świeże dane
-    st.button("🔄 Odśwież dane z Garmina", on_click=st.cache_data.clear)
-
 # ---------------------------------------------------------------
 # ZAKŁADKA 2: REGENERACJA (wszystkie wykresy)
 # ---------------------------------------------------------------
-with zakladka_regeneracja:
+def strona_regeneracja():
+    st.title("Regeneracja")
     st.subheader("Regeneracja (dane z Garmina)")
     dane_garmin_wykresy = wczytaj_dane_garmin_do_wykresow()
 
@@ -219,7 +224,8 @@ with zakladka_regeneracja:
 # ---------------------------------------------------------------
 # ZAKŁADKA 3: TRENING (formularz z bazą ćwiczeń)
 # ---------------------------------------------------------------
-with zakladka_trening:
+def strona_trening():
+    st.title("Trening")
     st.subheader("Dodaj trening")
 
     # Komunikaty po kliknięciu przycisku Zapisz
@@ -278,7 +284,8 @@ with zakladka_trening:
 # ---------------------------------------------------------------
 # ZAKŁADKA 4: HISTORIA I KALENDARZ
 
-with zakladka_historia:
+def strona_historia():
+    st.title("Historia i Kalendarz")
     st.subheader("Historia Treningów")
 
     historia_sesji = wczytaj_historie_sesji()
@@ -293,3 +300,26 @@ with zakladka_historia:
     if not stare_wpisy.empty:
         with st.expander("Archiwum: stare wpisy z poprzedniej wersji"):
             st.dataframe(stare_wpisy, use_container_width=True, hide_index=True)
+
+            # ---------------------------------------------------------------
+# MENU BOCZNE
+# ---------------------------------------------------------------
+# Lista stron: funkcja, nazwa w menu i ikona (Material Symbols)
+strony = [
+    st.Page(strona_start, title="Start", icon=":material/home:", default=True),
+    st.Page(strona_regeneracja, title="Regeneracja", icon=":material/bedtime:"),
+    st.Page(strona_trening, title="Trening", icon=":material/fitness_center:"),
+    st.Page(strona_historia, title="Historia i Kalendarz", icon=":material/calendar_month:"),
+]
+wybrana = st.navigation(strony)
+
+# Dół menu: połączenie z Garminem i ustawienia (pojawia się pod listą stron)
+with st.sidebar:
+    st.divider()
+    with st.expander("⚙️ Ustawienia i połączenie"):
+        st.caption("Status połączenia widać na stronie Start.")
+        st.button("🔄 Odśwież dane z Garmina", on_click=st.cache_data.clear, use_container_width=True)
+        st.caption("Dane logowania do Garmina są w pliku .env na tym komputerze.")
+
+# Uruchamia wybraną stronę. Musi być na końcu, po definicjach wszystkich funkcji.
+wybrana.run()

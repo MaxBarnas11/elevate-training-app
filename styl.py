@@ -36,72 +36,34 @@ header[data-testid="stHeader"] { background: transparent; }
 .tb-data { font-size: 1rem; color: #94A3B8; margin-top: 2px; }
 
 /* Pasek zakładek: duży, z wyraźnie zaznaczoną aktywną zakładką */
-/* ===== ZAKŁADKI (selektory oparte na rolach ARIA, odporne na zmiany wersji) ===== */
-/* Pasek zakładek: układ elastyczny, zakładki wyśrodkowane, odstęp między nimi */
-[role="tablist"] {
-  display: flex !important;
-  justify-content: center !important;
-  gap: 14px !important;
-  border-bottom: 1px solid rgba(59, 130, 246, 0.28);
-  padding-bottom: 8px;
+
+
+/* ===== MENU BOCZNE ===== */
+/* Tło menu w ciemnym granacie i cienka niebieska linia po prawej */
+section[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #070C1C 0%, #0B1530 100%);
+  border-right: 1px solid rgba(59, 130, 246, 0.28);
 }
-/* Pojedyncza zakładka: flex: 1 daje wszystkim równą szerokość i wypełnia pasek,
-   więc pasek jest pełnej szerokości i automatycznie wyśrodkowany */
-button[role="tab"] {
-  flex: 1 1 0 !important;
-  justify-content: center !important;
-  height: 4.6rem !important;
-  border-radius: 14px !important;
-  background: rgba(255, 255, 255, 0.04) !important;
-  border: 1px solid transparent !important;
+/* Pozycje menu: wyższe, z odstępami i zaokrąglone */
+[data-testid="stSidebarNav"] a,
+[data-testid="stSidebarNavLink"] {
+  padding: 0.9rem 1rem !important;
+  border-radius: 12px !important;
+  margin-bottom: 6px !important;
 }
-/* Napis: duży i pogrubiony. Gwiazdka (*) łapie wszystkie elementy wewnątrz przycisku,
-   bo Streamlit zagnieżdża tekst w kilku warstwach i rozmiar bywa ignorowany */
-button[role="tab"],
-button[role="tab"] * {
-  font-size: 1.6rem !important;
-  font-weight: 700 !important;
-  color: #E2E8F0 !important;
+/* Napis i ikona w pozycji menu: większe (ikona też jest elementem span) */
+[data-testid="stSidebarNav"] a span,
+[data-testid="stSidebarNavLink"] span {
+  font-size: 1.3rem !important;
+  font-weight: 600 !important;
 }
-button[role="tab"]:hover { background: rgba(37, 99, 235, 0.22) !important; }
-/* Aktywna zakładka: granatowo-niebieskie tło i biały napis */
-button[role="tab"][aria-selected="true"] {
+/* Aktualnie otwarta strona: wyróżnione granatowo-niebieskie tło */
+[data-testid="stSidebarNav"] a[aria-current="page"],
+[data-testid="stSidebarNavLink"][aria-current="page"] {
   background: linear-gradient(135deg, #1D4ED8, #0B1F4B) !important;
-  border: 1px solid #3B82F6 !important;
 }
-button[role="tab"][aria-selected="true"] * { color: #FFFFFF !important; }
-/* Domyślne podkreślenie zakładki (kolorowy pasek) ukrywamy; aktywną widać po tle */
-[role="tablist"] > div:not([role="tab"]) { display: none !important; }
-/* Kafelki z liczbami (metric) jako karty */
-[data-testid="stMetric"] {
-  background: linear-gradient(145deg, rgba(37, 99, 235, 0.16), rgba(255, 255, 255, 0.03));
-  border: 1px solid var(--ramka); border-radius: 16px; padding: 1.1rem 1.3rem;
-}
-[data-testid="stMetricLabel"] p {
-  font-size: 1rem; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.06em;
-}
-[data-testid="stMetricValue"] { font-size: 2.6rem; font-weight: 700; }
-
-/* Przyciski: wyższe, zaokrąglone; główny w kolorze granatowo-niebieskim */
-.stButton button {
-  min-height: 3.2rem; font-size: 1.1rem; border-radius: 12px;
-  border: 1px solid var(--ramka); background: rgba(255, 255, 255, 0.04);
-}
-.stButton button:hover { border-color: var(--akcent-jasny); }
-.stButton button[kind="primary"],
-.stButton button[data-testid="stBaseButton-primary"] {
-  background: linear-gradient(135deg, #2563EB, #1D4ED8); border: none; color: #FFFFFF;
-}
-
-/* ===== MARGINESY: treść w środku strony, nie na całą szerokość ===== */
-/* max-width = największa szerokość treści; margin: 0 auto = równe odstępy z lewej i prawej */
-.block-container,
-[data-testid="stMainBlockContainer"] {
-  max-width: 1300px !important;
-  margin: 0 auto !important;
-  padding-left: 2rem !important;
-  padding-right: 2rem !important;
-}
+/* Tytuły stron: większe */
+h1 { font-size: 2.6rem !important; font-weight: 800 !important; }
 
 </style>
         """,

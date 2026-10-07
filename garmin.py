@@ -46,7 +46,7 @@ def pobierz_jeden_dzien(garmin: Garmin, dzien: str) -> dict:
 
 
 # Cache na 15 min, więc kliknięcia w aplikacji nie męczą Garmina
-@st.cache_data(ttl=900, show_spinner="Synchronizuję dane z Garmina...")
+@st.cache_data(ttl=900, show_spinner=False)
 def synchronizuj_garmin(dzisiaj: str) -> dict:
     """Zwraca dzisiejsze dane z Garmina i uzupełnia bazę o brakujące dni."""
     email = os.getenv("GARMIN_EMAIL")
