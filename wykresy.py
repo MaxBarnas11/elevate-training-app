@@ -36,7 +36,7 @@ def rysuj_wykres(
     # Linia z punktami. Brak .interactive(), więc scroll nie przybliża wykresu.
     linia = (
         alt.Chart(df)
-        .mark_line(point=True, color="#4C9BE8")
+        .mark_line(point=True, color="#3B82F6")
         .encode(
             x=alt.X("Data:T", title=None, axis=alt.Axis(format="%d.%m", tickCount="day")),
             y=alt.Y(f"{kolumna}:Q", title=jednostka, scale=alt.Scale(zero=False)),

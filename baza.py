@@ -19,6 +19,39 @@ NOWE_KOLUMNY = {
     "Powtorzenia": "INTEGER",
 }
 
+# NOWE: rodzaje treningu siłowego (lista startowa, później dojdą kolejne w bazie)
+TYPY_TRENINGU = ["Dół Siła", "Góra Full", "Góra 50/50", "Dół Asymetria"]
+
+# NOWE: startowa baza ćwiczeń: (nazwa, partia). Ćwiczenia na górę dopiszemy później.
+CWICZENIA_STARTOWE = [
+    # Twoje ćwiczenia na dół
+    ("Przysiad ze sztangą", "Nogi"),
+    ("RDL (rumuński martwy ciąg)", "Nogi"),
+    ("Wyciskanie na suwnicy na jedną nogę", "Nogi"),
+    ("Wspięcia na palce stojąc", "Nogi"),
+    ("Przysiad bułgarski", "Nogi"),
+    ("Uginanie nóg na maszynie", "Nogi"),
+    ("Spacer farmera jednorącz", "Nogi"),
+    # Dodatkowe ćwiczenia na dół, żeby było z czego wybierać
+    ("Przysiad przedni", "Nogi"),
+    ("Przysiad kielichowy (goblet)", "Nogi"),
+    ("Wypychanie na suwnicy (obunóż)", "Nogi"),
+    ("Martwy ciąg", "Nogi"),
+    ("Martwy ciąg na prostych nogach", "Nogi"),
+    ("Hip thrust", "Nogi"),
+    ("Hip thrust na jednej nodze", "Nogi"),
+    ("Wykroki chodzone", "Nogi"),
+    ("Wykroki w miejscu", "Nogi"),
+    ("Wykroki w tył", "Nogi"),
+    ("Wejścia na podwyższenie (step-up)", "Nogi"),
+    ("Prostowanie nóg na maszynie", "Nogi"),
+    ("Uginanie nóg leżąc", "Nogi"),
+    ("Wspięcia na palce siedząc", "Nogi"),
+    ("Przysiad na jednej nodze na skrzynię", "Nogi"),
+    ("Good morning", "Nogi"),
+    ("Przywodziciele na maszynie", "Nogi"),
+    ("Odwodziciele na maszynie", "Nogi"),
+]
 
 def utworz_tabele(db: sqlite3.Connection) -> None:
     """Tworzy tabele (jeśli nie istnieją) w aktualnej strukturze."""
@@ -63,6 +96,67 @@ def migruj_tabele(db: sqlite3.Connection) -> None:
             db.execute(f"ALTER TABLE treningi ADD COLUMN {nazwa} {typ}")
     db.commit()
 
+def utworz_nowe_tabele(db: sqlite3.Connection) -> None:
+    """NOWE: tworzy tabele na treningi z wieloma ćwiczeniami i wypełnia listy startowe."""
+    # Rodzaje treningu (Kolejnosc ustala kolejność na liście rozwijanej)
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS typy_treningu (
+            Nazwa TEXT PRIMARY KEY,
+            Kolejnosc INTEGER
+        )
+        """
+    )
+    # Baza ćwiczeń: nazwa jest unikalna, więc nie da się dodać dwa razy tego samego
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cwiczenia (
+            Nazwa TEXT PRIMARY KEY,
+            Partia TEXT
+        )
+        """
+    )
+    # Jeden trening (sesja): data, rodzaj, waga ciała i komentarz do całości
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sesje (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Data TEXT NOT NULL,
+            Typ_treningu TEXT,
+            Waga REAL,
+            Komentarz TEXT
+        )
+        """
+    )
+    # Ćwiczenia wykonane w treningu; Sesja_id wskazuje, do którego treningu należą
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS wpisy_cwiczen (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Sesja_id INTEGER NOT NULL REFERENCES sesje(id),
+            Kolejnosc INTEGER,
+            Cwiczenie TEXT NOT NULL,
+            Ciezar REAL,
+            Serie INTEGER,
+            Powtorzenia INTEGER,
+            Komentarz TEXT
+        )
+        """
+    )
+
+    # INSERT OR IGNORE: wstawia tylko to, czego jeszcze nie ma, więc Twoje własne
+    # dopiski zostają, a ponowne uruchomienie niczego nie dubluje
+    for numer, nazwa in enumerate(TYPY_TRENINGU):
+        db.execute(
+            "INSERT OR IGNORE INTO typy_treningu (Nazwa, Kolejnosc) VALUES (?, ?)",
+            (nazwa, numer),
+        )
+    for nazwa, partia in CWICZENIA_STARTOWE:
+        db.execute(
+            "INSERT OR IGNORE INTO cwiczenia (Nazwa, Partia) VALUES (?, ?)",
+            (nazwa, partia),
+        )
+    db.commit()
 
 def przygotuj_baze() -> str | None:
     """Przygotowuje bazę. Zwraca tekst komunikatu, jeśli trzeba było odtworzyć plik."""
@@ -70,6 +164,7 @@ def przygotuj_baze() -> str | None:
         with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
             utworz_tabele(db)
             migruj_tabele(db)
+            utworz_nowe_tabele(db)  # NOWE
         return None
     except sqlite3.Error:
         # W razie błędu zachowujemy stary plik jako kopię (nie kasujemy go!)
@@ -78,6 +173,7 @@ def przygotuj_baze() -> str | None:
         SCIEZKA_BAZY.replace(kopia)
         with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
             utworz_tabele(db)
+            utworz_nowe_tabele(db)  # NOWE
         return f"Nie udało się odczytać bazy, więc stworzyłem nową. Stary plik zapisałem jako {kopia.name}."
 
 
@@ -184,11 +280,67 @@ def wczytaj_wage_do_wykresu() -> pd.DataFrame:
     """Dane do wykresu wagi: tylko z ręcznych wpisów w formularzu."""
     with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
         dane = pd.read_sql_query(
-            "SELECT Data, Waga FROM treningi WHERE Waga IS NOT NULL",
-            db,
+            "SELECT Data, Waga FROM treningi WHERE Waga IS NOT NULL "
+            "UNION ALL SELECT Data, Waga FROM sesje WHERE Waga IS NOT NULL",            db,
         )
     if dane.empty:
         return dane
     dane["Data"] = pd.to_datetime(dane["Data"])
     # Kilka wpisów jednego dnia = średnia, żeby był jeden punkt na dzień
     return dane.groupby("Data").mean(numeric_only=True).sort_index()
+
+def lista_typow_treningu() -> list[str]:
+    """NOWE: zwraca rodzaje treningu z bazy, w ustalonej kolejności."""
+    with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
+        wiersze = db.execute("SELECT Nazwa FROM typy_treningu ORDER BY Kolejnosc").fetchall()
+    return [w[0] for w in wiersze]
+
+
+def lista_cwiczen() -> list[str]:
+    """NOWE: zwraca ćwiczenia z bazy (w kolejności dodawania, Twoje na górze)."""
+    with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
+        wiersze = db.execute("SELECT Nazwa FROM cwiczenia ORDER BY rowid").fetchall()
+    return [w[0] for w in wiersze]
+
+def zapisz_sesje(
+    dzien: str,
+    typ: str,
+    waga: float,
+    komentarz: str,
+    cwiczenia: list[dict],
+) -> None:
+    """NOWE: zapisuje jeden trening i wszystkie jego ćwiczenia naraz (w jednej transakcji)."""
+    with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
+        kursor = db.execute(
+            "INSERT INTO sesje (Data, Typ_treningu, Waga, Komentarz) VALUES (?, ?, ?, ?)",
+            (dzien, typ, waga, komentarz),
+        )
+        sesja_id = kursor.lastrowid  # numer właśnie dodanego treningu
+
+        for numer, c in enumerate(cwiczenia, start=1):
+            db.execute(
+                """
+                INSERT INTO wpisy_cwiczen
+                    (Sesja_id, Kolejnosc, Cwiczenie, Ciezar, Serie, Powtorzenia, Komentarz)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (sesja_id, numer, c["cwiczenie"], c["ciezar"], c["serie"], c["powtorzenia"], c["komentarz"]),
+            )
+        db.commit()  # jeśli coś pójdzie źle wcześniej, nie zapisze się nic
+
+
+def wczytaj_historie_sesji() -> pd.DataFrame:
+    """NOWE: treningi z ćwiczeniami: jeden wiersz = jedno ćwiczenie (najnowsze na górze)."""
+    with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
+        return pd.read_sql_query(
+            """
+            SELECT s.Data, s.Typ_treningu AS Trening, s.Waga,
+                   w.Cwiczenie, w.Ciezar, w.Serie, w.Powtorzenia,
+                   w.Komentarz AS Komentarz_cwiczenia,
+                   s.Komentarz AS Komentarz_treningu
+            FROM sesje s
+            LEFT JOIN wpisy_cwiczen w ON w.Sesja_id = s.id
+            ORDER BY s.Data DESC, s.id DESC, w.Kolejnosc
+            """,
+            db,
+        )

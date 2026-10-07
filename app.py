@@ -12,45 +12,100 @@ from garminconnect import (
 )
 
 from baza import (
+    lista_cwiczen,
+    lista_typow_treningu,
     przygotuj_baze,
     wczytaj_dane_garmin_do_wykresow,
     wczytaj_historie,
+    wczytaj_historie_sesji,
     wczytaj_wage_do_wykresu,
-    zapisz_trening,
+    zapisz_sesje,
 )
 from garmin import formatuj_czas, synchronizuj_garmin
+from styl import naglowek, zastosuj_styl
 from wykresy import MIN_DNI_DLA_PASMA, SEN_PASMO, pasmo_osobiste, rysuj_wykres
 
 # Wczytuje zmienne z pliku .env (email i hasło do Garmina)
 load_dotenv()
 
 NAZWA_APLIKACJI = "Training Buddy"
-st.set_page_config(page_title=NAZWA_APLIKACJI, page_icon="🏐", layout="centered")
-
-# Lista rodzajów treningu do rozwijanej listy
-RODZAJE_TRENINGU = ["Dół 1", "Dół 2", "Góra 1", "Góra 2", "Siatkówka/Padel"]
-
-# Początkowa baza ćwiczeń (na razie zwykła lista, później ją rozwiniemy)
-BAZA_CWICZEN = [
-    "Przysiad ze sztangą",
-    "RDL",
-    "Przysiad bułgarski",
-    "Wyciskanie sztangi",
-    "Podciąganie",
-]
+st.set_page_config(page_title=NAZWA_APLIKACJI, page_icon="🏋️", layout="wide")
+zastosuj_styl()
 
 # Od ilu dni z wpisaną wagą pokazujemy wykres wagi
 MIN_DNI_WAGI = 3
 
 # Przygotowanie bazy; zwraca komunikat tylko, gdy plik musiał zostać odtworzony
 komunikat_bazy = przygotuj_baze()
+# NOWE: rodzaje treningu i ćwiczenia czytamy z bazy, a nie z listy w kodzie
+RODZAJE_TRENINGU = lista_typow_treningu()
+
+BAZA_CWICZEN = lista_cwiczen()
+
+# ---------------------------------------------------------------
+# FORMULARZ TRENINGU: dodawanie ćwiczeń i zapis
+# ---------------------------------------------------------------
+# Każde pole ćwiczenia ma klucz z przedrostkiem i numerem, np. cw_0, ci_0, se_0...
+PREFIKSY_POL = ("cw_", "ci_", "se_", "po_", "ko_")
+
+# Na starcie pokazujemy jeden blok ćwiczenia
+st.session_state.setdefault("liczba_cwiczen", 1)
+
+
+def dodaj_cwiczenie() -> None:
+    """Przycisk ➕: dokłada jeszcze jeden blok ćwiczenia."""
+    st.session_state["liczba_cwiczen"] += 1
+
+
+def usun_ostatnie_cwiczenie() -> None:
+    """Przycisk ➖: usuwa ostatni blok (zawsze zostaje co najmniej jeden)."""
+    ile = st.session_state["liczba_cwiczen"]
+    if ile > 1:
+        for przedrostek in PREFIKSY_POL:
+            st.session_state.pop(f"{przedrostek}{ile - 1}", None)
+        st.session_state["liczba_cwiczen"] = ile - 1
+
+
+def zapisz_z_formularza() -> None:
+    """Przycisk Zapisz: zbiera wpisane dane, zapisuje trening i czyści ćwiczenia."""
+    s = st.session_state
+    cwiczenia = []
+    for i in range(s["liczba_cwiczen"]):
+        if s.get(f"cw_{i}") is None:
+            s["blad_zapisu"] = f"Wybierz ćwiczenie w bloku numer {i + 1} (albo usuń ten blok przyciskiem ➖)."
+            return  # nic nie zapisujemy
+        cwiczenia.append(
+            {
+                "cwiczenie": s[f"cw_{i}"],
+                "ciezar": s[f"ci_{i}"],
+                "serie": int(s[f"se_{i}"]),
+                "powtorzenia": int(s[f"po_{i}"]),
+                "komentarz": s.get(f"ko_{i}", ""),
+            }
+        )
+
+    zapisz_sesje(
+        s["data_treningu"].isoformat(),
+        s["typ_treningu"],
+        s["waga_ciala"],
+        s.get("komentarz_treningu", ""),
+        cwiczenia,
+    )
+
+    # Po zapisie czyścimy ćwiczenia i komentarz; data, rodzaj i waga zostają
+    for klucz in list(s.keys()):
+        if klucz.startswith(PREFIKSY_POL):
+            del s[klucz]
+    s["liczba_cwiczen"] = 1
+    s["komentarz_treningu"] = ""
+    s["komunikat_zapisu"] = f"Trening zapisany! Liczba ćwiczeń: {len(cwiczenia)}."
 
 # ---------------------------------------------------------------
 # NAGŁÓWEK
 # ---------------------------------------------------------------
-st.title(f"🏐 {NAZWA_APLIKACJI}")
+
 dzisiaj = date.today().isoformat()  # format RRRR-MM-DD
-st.caption(f"Dziś: {date.today().strftime('%d.%m.%Y')}")
+naglowek(NAZWA_APLIKACJI, f"Dziś: {date.today().strftime('%d.%m.%Y')}")
 
 # Synchronizację z Garminem robimy RAZ, przed zakładkami, bo dane
 # są potrzebne zarówno na Pulpicie, jak i w formularzu treningu
@@ -74,7 +129,7 @@ except Exception as blad:
 # NAWIGACJA: poziomy pasek zakładek na górze strony
 # ---------------------------------------------------------------
 zakladka_start, zakladka_regeneracja, zakladka_trening, zakladka_historia = st.tabs(
-    ["Start (Pulpit)", "Regeneracja", "Trening", "Historia i Kalendarz"]
+    ["🏠 Start", "🌙 Regeneracja", "🏋️ Trening", "📅 Historia i Kalendarz"]
 )
 
 # ---------------------------------------------------------------
@@ -167,62 +222,74 @@ with zakladka_regeneracja:
 with zakladka_trening:
     st.subheader("Dodaj trening")
 
-    # st.form zbiera pola i wysyła je dopiero po kliknięciu przycisku
-    with st.form("formularz_treningu"):
-        waga = st.number_input(
-            "Dzisiejsza waga ciała (kg)",
-            min_value=30.0,
-            max_value=200.0,
-            value=80.0,
-            step=0.1,
-            format="%.1f",
-        )
-        rodzaj = st.selectbox("Rodzaj treningu", RODZAJE_TRENINGU)
+    # Komunikaty po kliknięciu przycisku Zapisz
+    if "komunikat_zapisu" in st.session_state:
+        st.success(st.session_state.pop("komunikat_zapisu"))
+    if "blad_zapisu" in st.session_state:
+        st.error(st.session_state.pop("blad_zapisu"))
 
-        st.markdown("**Główne ćwiczenie**")
-        cwiczenie = st.selectbox("Ćwiczenie", BAZA_CWICZEN)
+    # Górny rząd: data, rodzaj treningu i waga ciała
+    kol_data, kol_typ, kol_waga = st.columns(3)
+    kol_data.date_input("Data treningu", value=date.today(), key="data_treningu", format="DD.MM.YYYY")
+    kol_typ.selectbox("Rodzaj treningu", RODZAJE_TRENINGU, key="typ_treningu")
+    kol_waga.number_input(
+        "Waga ciała (kg)", min_value=30.0, max_value=200.0, value=88.0,
+        step=0.1, format="%.1f", key="waga_ciala",
+    )
 
-        kol_ciezar, kol_serie, kol_powt = st.columns(3)
-        ciezar = kol_ciezar.number_input(
-            "Ciężar (kg)", min_value=0.0, max_value=500.0, value=60.0, step=2.5, format="%.1f"
-        )
-        serie = kol_serie.number_input("Serie", min_value=1, max_value=20, value=4, step=1)
-        powtorzenia = kol_powt.number_input("Powtórzenia", min_value=1, max_value=100, value=5, step=1)
+    # Jeden blok na każde ćwiczenie; liczba bloków rośnie po kliknięciu ➕
+    for i in range(st.session_state["liczba_cwiczen"]):
+        with st.container(border=True):
+            st.markdown(f"**Ćwiczenie {i + 1}**")
+            # index=None: lista startuje pusta, żeby przypadkiem nie zapisać pierwszego z listy
+            st.selectbox(
+                "Ćwiczenie", BAZA_CWICZEN, index=None,
+                placeholder="Wybierz lub zacznij pisać nazwę...", key=f"cw_{i}",
+            )
+            kol_ciezar, kol_serie, kol_powt = st.columns(3)
+            kol_ciezar.number_input(
+                "Ciężar (kg)", min_value=0.0, max_value=500.0, value=60.0,
+                step=2.5, format="%.1f", key=f"ci_{i}",
+            )
+            kol_serie.number_input("Serie", min_value=1, max_value=20, value=4, step=1, key=f"se_{i}")
+            kol_powt.number_input("Powtórzenia", min_value=1, max_value=100, value=5, step=1, key=f"po_{i}")
+            st.text_input(
+                "Komentarz do ćwiczenia",
+                placeholder="np. RPE 8, ostatnia seria ciężko",
+                key=f"ko_{i}",
+            )
 
-        komentarz = st.text_area(
-            "Komentarz / samopoczucie / RPE",
-            placeholder="Jak się czułeś? Ocena trudności (RPE 1-10)?",
-            height=120,
-        )
+    # Przyciski pod ćwiczeniami: dodaj / usuń ostatnie
+    kol_plus, kol_minus = st.columns(2)
+    kol_plus.button("➕ Dodaj ćwiczenie", on_click=dodaj_cwiczenie, use_container_width=True)
+    kol_minus.button(
+        "➖ Usuń ostatnie ćwiczenie", on_click=usun_ostatnie_cwiczenie,
+        use_container_width=True, disabled=st.session_state["liczba_cwiczen"] <= 1,
+    )
 
-        zapisz = st.form_submit_button("💾 Zapisz Trening")
-
-    # Ten blok wykona się po kliknięciu "Zapisz Trening"
-    if zapisz:
-        zapisz_trening(
-            dzisiaj, dane_garmin, waga, rodzaj,
-            cwiczenie, ciezar, int(serie), int(powtorzenia), komentarz,
-        )
-        st.success(
-            f"**Trening zapisany w bazie!**\n\n"
-            f"- **Data:** {date.today().strftime('%d.%m.%Y')}\n"
-            f"- **Waga:** {waga:.1f} kg\n"
-            f"- **Rodzaj treningu:** {rodzaj}\n"
-            f"- **Ćwiczenie:** {cwiczenie}: {ciezar:g} kg x {int(powtorzenia)} powt. w {int(serie)} seriach\n"
-            f"- **Komentarz / RPE:** {komentarz or '—'}"
-        )
-        if dane_garmin is None:
-            st.warning("Dane z Garmina nie były dostępne, więc kolumny snu i RHR zostały puste.")
+    # Komentarz do całego treningu i zapis
+    st.text_area(
+        "Komentarz do całego treningu",
+        placeholder="Samopoczucie, ogólny RPE, uwagi...",
+        height=100, key="komentarz_treningu",
+    )
+    st.button("💾 Zapisz trening", type="primary", on_click=zapisz_z_formularza, use_container_width=True)
 
 # ---------------------------------------------------------------
 # ZAKŁADKA 4: HISTORIA I KALENDARZ
-# ---------------------------------------------------------------
+
 with zakladka_historia:
     st.subheader("Historia Treningów")
 
-    historia = wczytaj_historie()
+    historia_sesji = wczytaj_historie_sesji()
 
-    if historia.empty:
+    if historia_sesji.empty:
         st.info("Brak zapisanych treningów. Dodaj pierwszy w zakładce Trening.")
     else:
-        st.dataframe(historia, use_container_width=True, hide_index=True)
+        st.dataframe(historia_sesji, use_container_width=True, hide_index=True)
+
+    # Stare wpisy z wersji z jednym ćwiczeniem zostają w archiwum
+    stare_wpisy = wczytaj_historie()
+    if not stare_wpisy.empty:
+        with st.expander("Archiwum: stare wpisy z poprzedniej wersji"):
+            st.dataframe(stare_wpisy, use_container_width=True, hide_index=True)
