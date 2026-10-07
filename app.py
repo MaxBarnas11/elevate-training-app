@@ -28,7 +28,7 @@ from wykresy import MIN_DNI_DLA_PASMA, SEN_PASMO, pasmo_osobiste, rysuj_wykres
 # Wczytuje zmienne z pliku .env (email i hasło do Garmina)
 load_dotenv()
 
-NAZWA_APLIKACJI = "Training Buddy"
+NAZWA_APLIKACJI = "NextLvl Training"
 st.set_page_config(page_title=NAZWA_APLIKACJI, page_icon="🏋️", layout="wide")
 zastosuj_styl()
 
@@ -129,7 +129,7 @@ except Exception as blad:
 # NAWIGACJA: poziomy pasek zakładek na górze strony
 # ---------------------------------------------------------------
 zakladka_start, zakladka_regeneracja, zakladka_trening, zakladka_historia = st.tabs(
-    ["🏠 Start", "🌙 Regeneracja", "🏋️ Trening", "📅 Historia i Kalendarz"]
+    ["Start", "Regeneracja", "Trening", "Historia i Kalendarz"]
 )
 
 # ---------------------------------------------------------------

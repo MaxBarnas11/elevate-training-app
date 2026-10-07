@@ -281,10 +281,12 @@ def wczytaj_wage_do_wykresu() -> pd.DataFrame:
     with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
         dane = pd.read_sql_query(
             "SELECT Data, Waga FROM treningi WHERE Waga IS NOT NULL "
-            "UNION ALL SELECT Data, Waga FROM sesje WHERE Waga IS NOT NULL",            db,
+            "UNION ALL SELECT Data, Waga FROM sesje WHERE Waga IS NOT NULL",
+            db,
         )
-    if dane.empty:
-        return dane
+        if dane.empty:
+            return dane
+
     dane["Data"] = pd.to_datetime(dane["Data"])
     # Kilka wpisów jednego dnia = średnia, żeby był jeden punkt na dzień
     return dane.groupby("Data").mean(numeric_only=True).sort_index()

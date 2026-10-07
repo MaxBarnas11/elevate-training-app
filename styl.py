@@ -36,21 +36,42 @@ header[data-testid="stHeader"] { background: transparent; }
 .tb-data { font-size: 1rem; color: #94A3B8; margin-top: 2px; }
 
 /* Pasek zakładek: duży, z wyraźnie zaznaczoną aktywną zakładką */
-.stTabs [data-baseweb="tab-list"] { gap: 12px; border-bottom: 1px solid var(--ramka); padding-bottom: 8px; }
-.stTabs button[data-baseweb="tab"] {
-  height: 4rem; padding: 0 1.8rem; border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04); border: 1px solid transparent;
+/* ===== ZAKŁADKI (selektory oparte na rolach ARIA, odporne na zmiany wersji) ===== */
+/* Pasek zakładek: układ elastyczny, zakładki wyśrodkowane, odstęp między nimi */
+[role="tablist"] {
+  display: flex !important;
+  justify-content: center !important;
+  gap: 14px !important;
+  border-bottom: 1px solid rgba(59, 130, 246, 0.28);
+  padding-bottom: 8px;
 }
-.stTabs button[data-baseweb="tab"] p { font-size: 1.35rem !important; font-weight: 600; }
-.stTabs button[data-baseweb="tab"]:hover { background: rgba(37, 99, 235, 0.20); }
-.stTabs button[aria-selected="true"] {
-  background: linear-gradient(135deg, #1D4ED8, #0B1F4B);
-  border: 1px solid var(--akcent-jasny);
+/* Pojedyncza zakładka: flex: 1 daje wszystkim równą szerokość i wypełnia pasek,
+   więc pasek jest pełnej szerokości i automatycznie wyśrodkowany */
+button[role="tab"] {
+  flex: 1 1 0 !important;
+  justify-content: center !important;
+  height: 4.6rem !important;
+  border-radius: 14px !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid transparent !important;
 }
-.stTabs button[aria-selected="true"] p { color: #FFFFFF; }
-/* Ukrywamy domyślne czerwone podkreślenie zakładki */
-.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none; }
-
+/* Napis: duży i pogrubiony. Gwiazdka (*) łapie wszystkie elementy wewnątrz przycisku,
+   bo Streamlit zagnieżdża tekst w kilku warstwach i rozmiar bywa ignorowany */
+button[role="tab"],
+button[role="tab"] * {
+  font-size: 1.6rem !important;
+  font-weight: 700 !important;
+  color: #E2E8F0 !important;
+}
+button[role="tab"]:hover { background: rgba(37, 99, 235, 0.22) !important; }
+/* Aktywna zakładka: granatowo-niebieskie tło i biały napis */
+button[role="tab"][aria-selected="true"] {
+  background: linear-gradient(135deg, #1D4ED8, #0B1F4B) !important;
+  border: 1px solid #3B82F6 !important;
+}
+button[role="tab"][aria-selected="true"] * { color: #FFFFFF !important; }
+/* Domyślne podkreślenie zakładki (kolorowy pasek) ukrywamy; aktywną widać po tle */
+[role="tablist"] > div:not([role="tab"]) { display: none !important; }
 /* Kafelki z liczbami (metric) jako karty */
 [data-testid="stMetric"] {
   background: linear-gradient(145deg, rgba(37, 99, 235, 0.16), rgba(255, 255, 255, 0.03));
@@ -71,6 +92,17 @@ header[data-testid="stHeader"] { background: transparent; }
 .stButton button[data-testid="stBaseButton-primary"] {
   background: linear-gradient(135deg, #2563EB, #1D4ED8); border: none; color: #FFFFFF;
 }
+
+/* ===== MARGINESY: treść w środku strony, nie na całą szerokość ===== */
+/* max-width = największa szerokość treści; margin: 0 auto = równe odstępy z lewej i prawej */
+.block-container,
+[data-testid="stMainBlockContainer"] {
+  max-width: 1300px !important;
+  margin: 0 auto !important;
+  padding-left: 2rem !important;
+  padding-right: 2rem !important;
+}
+
 </style>
         """,
         unsafe_allow_html=True,
