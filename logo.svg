@@ -1,8 +1,1 @@
-<svg width="280" height="64" viewBox="0 0 280 64" xmlns="http://www.w3.org/2000/svg">
-  <rect x="2" y="22" width="5" height="20" rx="1.5" fill="#3B82F6"/>
-  <rect x="8" y="14" width="6" height="36" rx="2" fill="#2563EB"/>
-  <rect x="14" y="29" width="22" height="6" rx="2" fill="#E5E7EB"/>
-  <rect x="36" y="14" width="6" height="36" rx="2" fill="#2563EB"/>
-  <rect x="43" y="22" width="5" height="20" rx="1.5" fill="#3B82F6"/>
-  <text x="62" y="42" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="700" fill="#FFFFFF">Elevate</text>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 598 100" width="478" height="80"><defs><mask id="m" maskUnits="userSpaceOnUse" x="-5" y="-5" width="608" height="110"><rect x="-5" y="-5" width="608" height="110" fill="white"/><rect x="348" y="64" width="74" height="7" fill="black"/></mask></defs><g mask="url(#m)" fill="#1B1B1A" color="#1B1B1A"><path d="M64,11 H39 A28,28 0 0 0 11,39 V61 A28,28 0 0 0 39,89 H64" fill="none" stroke="currentColor" stroke-width="22"/><rect x="31" y="39" width="33" height="22"/><path d="M97,0 V61 A28,28 0 0 0 125,89 H150" fill="none" stroke="currentColor" stroke-width="22"/><path d="M236,11 H211 A28,28 0 0 0 183,39 V61 A28,28 0 0 0 211,89 H236" fill="none" stroke="currentColor" stroke-width="22"/><rect x="203" y="39" width="33" height="22"/><polygon points="258,0 283,0 293,68 303,0 328,0 305,100 281,100"/><polygon points="372,0 398,0 420,100 396,100 385,28 374,100 350,100"/><rect x="442" y="0" width="70" height="22"/><rect x="466" y="30" width="22" height="70"/><path d="M598,11 H573 A28,28 0 0 0 545,39 V61 A28,28 0 0 0 573,89 H598" fill="none" stroke="currentColor" stroke-width="22"/><rect x="565" y="39" width="33" height="22"/></g></svg>

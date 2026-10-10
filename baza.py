@@ -346,3 +346,35 @@ def wczytaj_historie_sesji() -> pd.DataFrame:
             """,
             db,
         )
+
+def _utworz_tabele_samopoczucia(db: sqlite3.Connection) -> None:
+    """Tworzy tabelę z wpisami o samopoczuciu, jeśli jeszcze jej nie ma."""
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS samopoczucie ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "Zapisano TEXT NOT NULL, "
+        "Tekst TEXT NOT NULL, "
+        "Odpowiedz TEXT)"  # miejsce na przyszłą odpowiedź modelu AI
+    )
+
+
+def zapisz_samopoczucie(tekst: str) -> None:
+    """Zapisuje wpis użytkownika razem z datą i godziną (czas lokalny)."""
+    with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
+        _utworz_tabele_samopoczucia(db)
+        db.execute(
+            "INSERT INTO samopoczucie (Zapisano, Tekst) VALUES (datetime('now', 'localtime'), ?)",
+            (tekst,),
+        )
+        db.commit()
+
+
+def wczytaj_ostatnie_samopoczucie(ile: int = 5) -> pd.DataFrame:
+    """Zwraca ostatnie wpisy (najnowszy pierwszy)."""
+    with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
+        _utworz_tabele_samopoczucia(db)
+        return pd.read_sql_query(
+            "SELECT Zapisano, Tekst, Odpowiedz FROM samopoczucie ORDER BY id DESC LIMIT ?",
+            db,
+            params=(ile,),
+        )
