@@ -10,7 +10,10 @@ from garminconnect import Garmin
 from baza import zapisane_dni_garmin, zapisz_dzien_garmin
 
 # Ile dni wstecz uzupełniać z Garmina (gdy jeszcze ich nie mamy w bazie)
-LICZBA_DNI_WSTECZ = 6
+LICZBA_DNI_WSTECZ = 14
+
+# Ile brakujących dni dociągamy przy jednym odświeżeniu (żeby nie zasypać Garmina zapytaniami)
+MAKS_DOCIAGNIEC_NA_RAZ = 5
 
 
 def formatuj_czas(sekundy: int | None) -> str:
@@ -19,6 +22,10 @@ def formatuj_czas(sekundy: int | None) -> str:
         return "brak danych"
     godziny, reszta = divmod(sekundy, 3600)
     return f"{godziny} h {reszta // 60} min"
+
+
+def _liczba(wartosc) -> int | None:
+    return round(wartosc) if wartosc is not None else None
 
 
 def pobierz_jeden_dzien(garmin: Garmin, dzien: str) -> dict:
@@ -37,11 +44,25 @@ def pobierz_jeden_dzien(garmin: Garmin, dzien: str) -> dict:
         except Exception:
             hrv = None  # brak HRV nie może psuć reszty
 
+    stres = statystyki.get("averageStressLevel")
+    if stres is not None and stres < 0:
+        stres = None  # Garmin daje -1, gdy nie zmierzył stresu
+
     return {
         "wynik_snu": wynik_snu,
         "czas_snu": sen.get("sleepTimeSeconds"),
         "rhr": statystyki.get("restingHeartRate"),
         "hrv": round(hrv) if hrv is not None else None,
+        "kroki": statystyki.get("totalSteps"),
+        "cel_krokow": statystyki.get("dailyStepGoal"),
+        "kcal_aktywne": _liczba(statystyki.get("activeKilocalories")),
+        "kcal_spoczynkowe": _liczba(statystyki.get("bmrKilocalories")),
+        "stres": round(stres) if stres is not None else None,
+        # fazy snu w sekundach (do bazy trafiają w minutach)
+        "sen_gleboki": sen.get("deepSleepSeconds"),
+        "sen_rem": sen.get("remSleepSeconds"),
+        "sen_lekki": sen.get("lightSleepSeconds"),
+        "sen_czuwanie": sen.get("awakeSleepSeconds"),
     }
 
 
@@ -63,14 +84,19 @@ def synchronizuj_garmin(dzisiaj: str) -> dict:
 
     # Brakujące dni z ostatnich LICZBA_DNI_WSTECZ dni (tylko te, których nie ma w bazie)
     dzis = date.fromisoformat(dzisiaj)
+        
     mamy = zapisane_dni_garmin()
+    dociagniete = 0
     for i in range(1, LICZBA_DNI_WSTECZ):
         dzien = (dzis - timedelta(days=i)).isoformat()
         if dzien in mamy:
             continue
+        if dociagniete >= MAKS_DOCIAGNIEC_NA_RAZ:
+            break  # resztę uzupełnimy przy następnym odświeżeniu
+        dociagniete += 1
         try:
             zapisz_dzien_garmin(dzien, pobierz_jeden_dzien(garmin, dzien))
         except Exception:
-            continue  # jeden zły dzień nie psuje reszty; spróbujemy następnym razem
+            continue
 
     return dane_dzis

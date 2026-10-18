@@ -19,6 +19,19 @@ NOWE_KOLUMNY = {
     "Powtorzenia": "INTEGER",
 }
 
+# Dodatkowe dane dzienne z Garmina (nazwa kolumny -> typ w SQLite); sen w minutach
+NOWE_KOLUMNY_GARMIN = {
+    "Kroki": "INTEGER",
+    "Cel_krokow": "INTEGER",
+    "Kcal_aktywne": "INTEGER",
+    "Kcal_spoczynkowe": "INTEGER",
+    "Stres": "INTEGER",
+    "Sen_gleboki": "INTEGER",
+    "Sen_rem": "INTEGER",
+    "Sen_lekki": "INTEGER",
+    "Sen_czuwanie": "INTEGER",
+}
+
 # NOWE: rodzaje treningu siłowego (lista startowa, później dojdą kolejne w bazie)
 TYPY_TRENINGU = ["Dół Siła", "Góra Full", "Góra 50/50", "Dół Asymetria"]
 
@@ -51,6 +64,34 @@ CWICZENIA_STARTOWE = [
     ("Good morning", "Nogi"),
     ("Przywodziciele na maszynie", "Nogi"),
     ("Odwodziciele na maszynie", "Nogi"),
+    # Klasyczne ćwiczenia (dopisane 15.10): górna część ciała, brzuch, cardio
+    ("Wyciskanie hantli na ławce płaskiej", "Klatka"),
+    ("Wyciskanie sztangi na ławce skośnej dodatniej", "Klatka"),
+    ("Wyciskanie na maszynie (klatka)", "Klatka"),
+    ("Rozpiętki z hantlami", "Klatka"),
+    ("Pompki", "Klatka"),
+    ("Podciąganie podchwytem", "Plecy"),
+    ("Wiosłowanie na maszynie", "Plecy"),
+    ("Wiszenie na drążku", "Plecy"),
+    ("Wyciskanie na maszynie (barki)", "Barki"),
+    ("Wznosy ramion w opadzie z hantlami", "Barki"),
+    ("Uginanie ramion ze sztangą stojąc", "Biceps"),
+    ("Uginanie ramion z hantlami", "Biceps"),
+    ("Wyciskanie sztangi wąskim chwytem", "Triceps"),
+    ("Prostowanie ramion z hantlą zza głowy", "Triceps"),
+    ("Dipy na poręczach", "Triceps"),
+    ("Plank boczny", "Brzuch"),
+    ("Unoszenie nóg w zwisie", "Brzuch"),
+    ("Martwy robak (dead bug)", "Brzuch"),
+    ("Skręty rosyjskie (russian twist)", "Brzuch"),
+    ("Kettlebell swing", "Cały"),
+    ("Bieganie na bieżni", "Cardio"),
+    ("Bieg na zewnątrz", "Cardio"),
+    ("Marsz pod górę na bieżni", "Cardio"),
+    ("Rower stacjonarny", "Cardio"),
+    ("Orbitrek", "Cardio"),
+    ("Skakanka", "Cardio"),
+    ("Pływanie", "Cardio"),
 ]
 
 def utworz_tabele(db: sqlite3.Connection) -> None:
@@ -85,6 +126,11 @@ def utworz_tabele(db: sqlite3.Connection) -> None:
         )
         """
     )
+        # Dokładamy nowe kolumny do istniejącej tabeli (stare dane zostają)
+    istniejace = {w[1] for w in db.execute("PRAGMA table_info(garmin_dziennie)")}
+    for nazwa, typ in NOWE_KOLUMNY_GARMIN.items():
+        if nazwa not in istniejace:
+            db.execute(f"ALTER TABLE garmin_dziennie ADD COLUMN {nazwa} {typ}")
     db.commit()
 
 
@@ -236,24 +282,37 @@ def wczytaj_historie() -> pd.DataFrame:
     return dane[[k for k in kolejnosc if k in dane.columns]]
 
 
+def _w_minutach(sekundy) -> int | None:
+    return round(sekundy / 60) if sekundy is not None else None
+
+
 def zapisz_dzien_garmin(dzien: str, dane: dict) -> None:
     """Zapisuje (lub aktualizuje) jeden dzień w tabeli garmin_dziennie."""
-    czas_s = dane.get("czas_snu")
-    czas_min = round(czas_s / 60) if czas_s is not None else None
+    wartosci = {
+        "Wynik_snu": dane.get("wynik_snu"),
+        "Czas_snu": _w_minutach(dane.get("czas_snu")),
+        "RHR": dane.get("rhr"),
+        "HRV": dane.get("hrv"),
+        "Kroki": dane.get("kroki"),
+        "Cel_krokow": dane.get("cel_krokow"),
+        "Kcal_aktywne": dane.get("kcal_aktywne"),
+        "Kcal_spoczynkowe": dane.get("kcal_spoczynkowe"),
+        "Stres": dane.get("stres"),
+        "Sen_gleboki": _w_minutach(dane.get("sen_gleboki")),
+        "Sen_rem": _w_minutach(dane.get("sen_rem")),
+        "Sen_lekki": _w_minutach(dane.get("sen_lekki")),
+        "Sen_czuwanie": _w_minutach(dane.get("sen_czuwanie")),
+    }
+    kolumny = ", ".join(wartosci)
+    znaki = ", ".join("?" for _ in wartosci)
+    # COALESCE: jeśli nowa wartość jest pusta, zostaje stara (nie kasujemy danych)
+    aktualizacja = ", ".join(f"{k} = COALESCE(excluded.{k}, {k})" for k in wartosci)
 
     with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
-        # COALESCE: jeśli nowa wartość jest pusta, zostaje stara (nie kasujemy danych)
         db.execute(
-            """
-            INSERT INTO garmin_dziennie (Data, Wynik_snu, Czas_snu, RHR, HRV)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(Data) DO UPDATE SET
-                Wynik_snu = COALESCE(excluded.Wynik_snu, Wynik_snu),
-                Czas_snu  = COALESCE(excluded.Czas_snu, Czas_snu),
-                RHR       = COALESCE(excluded.RHR, RHR),
-                HRV       = COALESCE(excluded.HRV, HRV)
-            """,
-            (dzien, dane.get("wynik_snu"), czas_min, dane.get("rhr"), dane.get("hrv")),
+            f"INSERT INTO garmin_dziennie (Data, {kolumny}) VALUES (?, {znaki}) "
+            f"ON CONFLICT(Data) DO UPDATE SET {aktualizacja}",
+            (dzien, *wartosci.values()),
         )
         db.commit()
 
@@ -261,7 +320,7 @@ def zapisz_dzien_garmin(dzien: str, dane: dict) -> None:
 def zapisane_dni_garmin() -> set[str]:
     """Zwraca zbiór dat, które mamy już zapisane z Garmina."""
     with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
-        wiersze = db.execute("SELECT Data FROM garmin_dziennie").fetchall()
+        wiersze = db.execute("SELECT Data FROM garmin_dziennie WHERE Kroki IS NOT NULL").fetchall()
     return {w[0] for w in wiersze}
 
 
@@ -274,6 +333,32 @@ def wczytaj_dane_garmin_do_wykresow() -> pd.DataFrame:
         )
     dane["Data"] = pd.to_datetime(dane["Data"])
     return dane.set_index("Data")
+
+
+def wczytaj_garmin_rozszerzone(dni: int = 14) -> pd.DataFrame:
+    """Ostatnie dni z fazami snu i stresem (do kafelków na Start). Indeks: data."""
+    with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
+        dane = pd.read_sql_query(
+            "SELECT Data, Stres, Sen_gleboki, Sen_rem, Sen_lekki, Sen_czuwanie "
+            "FROM garmin_dziennie ORDER BY Data DESC LIMIT ?",
+            db,
+            params=(dni,),
+        )
+    dane["Data"] = pd.to_datetime(dane["Data"])
+    return dane.set_index("Data").sort_index()
+
+
+def wczytaj_garmin_rozszerzone(dni: int = 14) -> pd.DataFrame:
+    """Ostatnie dni z fazami snu i stresem (do kafelków na Start). Indeks: data."""
+    with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
+        dane = pd.read_sql_query(
+            "SELECT Data, Stres, Sen_gleboki, Sen_rem, Sen_lekki, Sen_czuwanie "
+            "FROM garmin_dziennie ORDER BY Data DESC LIMIT ?",
+            db,
+            params=(dni,),
+        )
+    dane["Data"] = pd.to_datetime(dane["Data"])
+    return dane.set_index("Data").sort_index()
 
 
 def wczytaj_wage_do_wykresu() -> pd.DataFrame:
@@ -323,10 +408,11 @@ def zapisz_sesje(
             db.execute(
                 """
                 INSERT INTO wpisy_cwiczen
-                    (Sesja_id, Kolejnosc, Cwiczenie, Ciezar, Serie, Powtorzenia, Komentarz)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (Sesja_id, Kolejnosc, Cwiczenie, Ciezar, Serie, Powtorzenia, Komentarz, Jednostka)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (sesja_id, numer, c["cwiczenie"], c["ciezar"], c["serie"], c["powtorzenia"], c["komentarz"]),
+                (sesja_id, numer, c["cwiczenie"], c["ciezar"], c["serie"], c["powtorzenia"], c["komentarz"],
+                 c.get("jednostka") or "powt."),
             )
         db.commit()  # jeśli coś pójdzie źle wcześniej, nie zapisze się nic
 

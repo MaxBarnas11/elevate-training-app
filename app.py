@@ -1,10 +1,12 @@
 """Interfejs aplikacji Training Buddy (zakładki, formularz)."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
+import html
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from garminconnect import (
     GarminConnectAuthenticationError,
@@ -12,18 +14,7 @@ from garminconnect import (
     GarminConnectTooManyRequestsError,
 )
 
-from baza import (
-    lista_cwiczen,
-    lista_typow_treningu,
-    przygotuj_baze,
-    wczytaj_dane_garmin_do_wykresow,
-    zapisz_samopoczucie,
-    wczytaj_ostatnie_samopoczucie,
-    wczytaj_historie,
-    wczytaj_historie_sesji,
-    wczytaj_wage_do_wykresu,
-    zapisz_sesje,
-)
+import baza
 from garmin import formatuj_czas, synchronizuj_garmin
 from styl import naglowek, zastosuj_styl
 from wykresy import MIN_DNI_DLA_PASMA, SEN_PASMO, pasmo_osobiste, rysuj_wykres
@@ -31,14 +22,21 @@ from karty import (
     karta_pierscien, karta_wartosc, kolor_snu, status_snu,
     kolor_czasu_snu, status_czasu_snu, naglowek_strony, format_czasu, ocena_wzgledem_pasma, oblicz_gotowosc, karta_tekst, siatka_kart
 )
+from karty_start import karta_kroki, karta_kalorie, karta_stres, karta_sen_fazy, karta_tydzien
+import regeneracja
+import sesja_treningowa
+import postepy
 from karty_presety import widok_presetu_html
 from presety import (wczytaj_presety_startowe, lista_presetow, wczytaj_cwiczenia_presetu,
                      zapisz_cwiczenia_presetu, JEDNOSTKI, ROLE, MAKS_GLOWNYCH)
+from datetime import datetime
+from plan import (wczytaj_plan, zapisz_plan, podsumowanie_tygodnia, plan_na_dzien, trening_zapisany,
+                  NAZWY_DNI, SKROTY_DNI, nazwa_krotka)
 
 # Wczytuje zmienne z pliku .env (email i hasło do Garmina)
 load_dotenv()
 
-NAZWA_APLIKACJI = "NextLvl Training"
+NAZWA_APLIKACJI = "ELEVATE"
 st.set_page_config(
     page_title=NAZWA_APLIKACJI, page_icon="🏋️", layout="wide",
     initial_sidebar_state="expanded",
@@ -62,6 +60,23 @@ CSS_DODATKOWY = """
 [data-testid="stAppViewBlockContainer"],
 .stMain .block-container,
 .block-container { padding-top: 0 !important; }
+
+/* Telefon: nagłówek z logo ma tło, a treść zaczyna się pod nim (inaczej logo nachodzi na pierwszy element) */
+@media (max-width: 768px) {
+    [data-testid="stHeader"] {
+        background: rgba(233, 223, 203, 0.92) !important;
+        -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    }
+    [data-testid="stMainBlockContainer"],
+    [data-testid="stAppViewBlockContainer"],
+    .stMain .block-container,
+    .block-container { padding-top: 4rem !important; }
+    /* iPhone przybliża stronę po stuknięciu w pole z czcionką mniejszą niż 16 px */
+    input, textarea, select { font-size: 16px !important; }
+}
+
+/* Bez przybliżania podwójnym stuknięciem (zwykłe stuknięcia i przewijanie działają jak zawsze) */
+html, body, .stApp { touch-action: manipulation; }
 
 /* Logo w menu bocznym */
 [data-testid="stLogo"],
@@ -140,27 +155,74 @@ CSS_DODATKOWY = """
 }
 </style>
 """
-st.markdown(CSS_DODATKOWY, unsafe_allow_html=True)
+CSS_DZISIEJSZY_TRENING = """
+<style>
+@keyframes dzis-puls {
+    0%   { box-shadow: 0 0 0 0 rgba(232, 117, 26, 0.55); }
+    70%  { box-shadow: 0 0 0 9px rgba(232, 117, 26, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(232, 117, 26, 0); }
+}
+a[data-testid="stSidebarNavLink"][href$="/dzis"],
+[data-testid="stSidebarNav"] a[href$="/dzis"] {
+    background: #1B1B1A !important;
+    border-radius: 12px !important;
+    animation: dzis-puls 2.4s ease-out infinite;
+}
+a[data-testid="stSidebarNavLink"][href$="/dzis"] *,
+[data-testid="stSidebarNav"] a[href$="/dzis"] * {
+    color: #F4ECDC !important;
+    font-weight: 600 !important;
+}
+@media (prefers-reduced-motion: reduce) {
+    a[data-testid="stSidebarNavLink"][href$="/dzis"] { animation: none; }
+}
+</style>
+"""
+
+# Pozycja "Dziś: ..." w menu pulsuje tylko w dzień treningowy, dopóki trening nie jest zapisany
+_pulsuj_dzis = plan_na_dzien()["Aktywny"] and not trening_zapisany()
+st.markdown(CSS_DODATKOWY + (CSS_DZISIEJSZY_TRENING if _pulsuj_dzis else ""), unsafe_allow_html=True)
 
 zastosuj_styl()
 # Logo nad menu bocznym (plik logo.svg leży obok app.py)
 st.logo(str(Path(__file__).parent / "logo.svg"), size="large")
 
+# Blokada przybliżania szczypaniem (iPhone ignoruje user-scalable=no, więc blokujemy gesty skryptem).
+# Skrypt działa w ukrytej ramce i zakłada zmiany na stronie nadrzędnej. Wyłączenie przybliżania utrudnia obsługę
+# osobom słabowidzącym; jeśli aplikacja trafi do innych użytkowników, warto to usunąć albo zostawić do wyboru.
+with st.sidebar:
+    components.html(
+        """<script>
+        const d = window.parent.document;
+        if (!d.__bezZoomu) {
+            d.__bezZoomu = true;
+            ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (e) {
+                d.addEventListener(e, function (ev) { ev.preventDefault(); }, {passive: false});
+            });
+            d.addEventListener('touchmove', function (ev) {
+                if (ev.touches.length > 1) { ev.preventDefault(); }
+            }, {passive: false});
+            const m = d.querySelector('meta[name=viewport]');
+            if (m) { m.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'); }
+        }
+        </script>""",
+        height=0,
+    )
+
 # Od ilu dni z wpisaną wagą pokazujemy wykres wagi
 MIN_DNI_WAGI = 3
 
 # Przygotowanie bazy; zwraca komunikat tylko, gdy plik musiał zostać odtworzony
-komunikat_bazy = przygotuj_baze()
-# NOWE: rodzaje treningu i ćwiczenia czytamy z bazy, a nie z listy w kodzie
-RODZAJE_TRENINGU = lista_typow_treningu()
-
-BAZA_CWICZEN = lista_cwiczen()
+komunikat_bazy = baza.przygotuj_baze()
+sesja_treningowa.kopia_dzienna()   # raz dziennie kopia bazy w folderze kopie/ (przy pierwszym uruchomieniu danego dnia)
+# Ćwiczenia czytamy z bazy, a nie z listy w kodzie. Rodzaj treningu to po prostu nazwa presetu.
+BAZA_CWICZEN = baza.lista_cwiczen()
 
 # ---------------------------------------------------------------
 # FORMULARZ TRENINGU: dodawanie ćwiczeń i zapis
 # ---------------------------------------------------------------
 # Każde pole ćwiczenia ma klucz z przedrostkiem i numerem, np. cw_0, ci_0, se_0...
-PREFIKSY_POL = ("cw_", "ci_", "se_", "po_", "ko_")
+PREFIKSY_POL = ("cw_", "jd_", "ci_", "se_", "po_", "ko_")
 
 # Na starcie pokazujemy jeden blok ćwiczenia
 st.session_state.setdefault("liczba_cwiczen", 1)
@@ -175,9 +237,17 @@ def usun_ostatnie_cwiczenie() -> None:
     """Przycisk ➖: usuwa ostatni blok (zawsze zostaje co najmniej jeden)."""
     ile = st.session_state["liczba_cwiczen"]
     if ile > 1:
-        for przedrostek in PREFIKSY_POL:
-            st.session_state.pop(f"{przedrostek}{ile - 1}", None)
+        nr = ile - 1
+        for klucz in list(st.session_state.keys()):
+            if any(klucz == f"{p}{nr}" or klucz.startswith(f"{p}{nr}_") for p in PREFIKSY_POL):
+                del st.session_state[klucz]
         st.session_state["liczba_cwiczen"] = ile - 1
+
+
+def jednostka_bloku(i: int) -> str:
+    """Jednostka ćwiczenia w bloku i: wybrana ręcznie albo automatyczna (rower stacjonarny: minuty, plank: sekundy)."""
+    s = st.session_state
+    return sesja_treningowa.jednostka_formularza(s.get(f"cw_{i}"), s.get(f"jd_{i}"))
 
 
 def zapisz_z_formularza() -> None:
@@ -188,19 +258,22 @@ def zapisz_z_formularza() -> None:
         if s.get(f"cw_{i}") is None:
             s["blad_zapisu"] = f"Wybierz ćwiczenie w bloku numer {i + 1} (albo usuń ten blok przyciskiem ➖)."
             return  # nic nie zapisujemy
+        u = jednostka_bloku(i)
         cwiczenia.append(
             {
                 "cwiczenie": s[f"cw_{i}"],
-                "ciezar": s[f"ci_{i}"],
-                "serie": int(s[f"se_{i}"]),
-                "powtorzenia": int(s[f"po_{i}"]),
+                "ciezar": float(s.get(f"ci_{i}_{u}") or 0.0),   # dla minut pola kg nie ma
+                "serie": int(s[f"se_{i}_{u}"]),
+                "powtorzenia": int(s[f"po_{i}_{u}"]),
+                "jednostka": u,
                 "komentarz": s.get(f"ko_{i}", ""),
             }
         )
 
-    zapisz_sesje(
+    sesja_treningowa.przygotuj_tabele()   # dokłada kolumnę z jednostką, gdyby jej jeszcze nie było
+    baza.zapisz_sesje(
         s["data_treningu"].isoformat(),
-        s["typ_treningu"],
+        "" if s["typ_treningu"] == sesja_treningowa.BRAK_RODZAJU else s["typ_treningu"],
         s["waga_ciala"],
         s.get("komentarz_treningu", ""),
         cwiczenia,
@@ -268,7 +341,7 @@ def strona_start():
 
     if wyslano:
         if wpis.strip():
-            zapisz_samopoczucie(wpis.strip())
+            baza.zapisz_samopoczucie(wpis.strip())
             st.success("Zapisane.")
         else:
             st.warning("Najpierw wpisz kilka słów.")
@@ -293,7 +366,7 @@ def strona_start():
         hrv = dane_garmin["hrv"]
 
         # Historia z bazy: normę liczymy z całej historii, na wykresie pokazujemy 14 ostatnich dni
-        historia = wczytaj_dane_garmin_do_wykresow()
+        historia = baza.wczytaj_dane_garmin_do_wykresow()
         pasmo_rhr = pasmo_osobiste(historia["RHR"])
         pasmo_hrv = pasmo_osobiste(historia["HRV"])
         seria_rhr = historia["RHR"].dropna().tail(14).tolist()
@@ -308,9 +381,14 @@ def strona_start():
         gotowosc = oblicz_gotowosc(czas_snu_min, rhr, srednia_rhr)
         procent = gotowosc["procent"]
 
-                # Karty w jednej siatce: jednakowe odstępy w poziomie i w pionie
+        # Dodatkowe dane z Garmina: kroki, kalorie, stres (z .get, bo stary cache mógł ich nie mieć)
+        kroki = dane_garmin.get("kroki")
+        rozszerzone = baza.wczytaj_garmin_rozszerzone(14)
+
+        # Karty w jednej siatce: jednakowe odstępy w poziomie i w pionie
         st.markdown(
             siatka_kart([
+                # rząd 1
                 karta_pierscien("Wynik snu", wynik_snu, 100, kolor_snu(wynik_snu), status_snu(wynik_snu)),
                 karta_pierscien(
                     "Czas snu", czas_snu_min, 480,
@@ -319,11 +397,17 @@ def strona_start():
                 ),
                 karta_wartosc("Tętno spoczynkowe", rhr, "bpm", kolor_rhr, status_rhr, seria_rhr, pasmo_rhr),
                 karta_wartosc("HRV", hrv, "ms", kolor_hrv, status_hrv, seria_hrv, pasmo_hrv),
+                # rząd 2
                 karta_pierscien(
                     "Gotowość do treningu", procent, 100, gotowosc["kolor"],
                     gotowosc["status"], gotowosc["podpis"],
                     tekst_srodka=f"{procent}%" if procent is not None else None,
                 ),
+                karta_kroki(kroki, dane_garmin.get("cel_krokow")),
+                karta_kalorie(dane_garmin.get("kcal_aktywne"), dane_garmin.get("kcal_spoczynkowe")),
+                karta_stres(dane_garmin.get("stres"), rozszerzone["Stres"], date.today()),                # rząd 3: dwie szerokie karty
+                karta_sen_fazy(rozszerzone, date.today()),
+                karta_tydzien(podsumowanie_tygodnia()),
             ]),
             unsafe_allow_html=True,
         )
@@ -332,49 +416,8 @@ def strona_start():
 # ---------------------------------------------------------------
 
 def strona_regeneracja():
-    st.markdown(naglowek_strony("Regeneracja"), unsafe_allow_html=True)
-    st.subheader("Regeneracja (dane z Garmina)")
-    dane_garmin_wykresy = wczytaj_dane_garmin_do_wykresow()
-
-    if len(dane_garmin_wykresy) < 2:
-        st.info("Wykresy regeneracji pojawią się, gdy w bazie będą dane z co najmniej dwóch dni.")
-    else:
-        st.caption("Wynik snu (zielone pole: dobry i doskonały sen)")
-        rysuj_wykres(dane_garmin_wykresy, "Wynik_snu", "Wynik snu", "punkty", pasmo=SEN_PASMO)
-
-        st.caption("Tętno spoczynkowe, RHR (zielone pole: Twój zwykły zakres)")
-        rysuj_wykres(
-            dane_garmin_wykresy, "RHR", "RHR", "bpm",
-            pasmo=pasmo_osobiste(dane_garmin_wykresy["RHR"]),
-        )
-
-        # HRV rysujemy tylko, jeśli Garmin w ogóle zwrócił jakiekolwiek wartości
-        if dane_garmin_wykresy["HRV"].notna().any():
-            st.caption("HRV (zielone pole: Twój zwykły zakres)")
-            rysuj_wykres(
-                dane_garmin_wykresy, "HRV", "HRV", "ms",
-                pasmo=pasmo_osobiste(dane_garmin_wykresy["HRV"]),
-            )
-        else:
-            st.info("Brak danych HRV z Garmina, więc wykres HRV się nie pokazuje.")
-
-        st.caption(
-            f"Zielone pole dla RHR i HRV to Twoja średnia ± odchylenie standardowe "
-            f"(pojawia się od {MIN_DNI_DLA_PASMA} dni danych). Dla RHR niżej zwykle znaczy lepiej."
-        )
-
-    # Wykres wagi zależy od ręcznych wpisów
-    st.subheader("Waga ciała (kg)")
-    dane_wagi = wczytaj_wage_do_wykresu()
-
-    if len(dane_wagi) < MIN_DNI_WAGI:
-        st.info(
-            f"Wykres wagi pojawi się, gdy wpiszesz wagę w co najmniej {MIN_DNI_WAGI} różnych "
-            f"dniach (na razie: {len(dane_wagi)})."
-        )
-    else:
-        rysuj_wykres(dane_wagi, "Waga", "Waga", "kg")
-
+    st.markdown(naglowek_strony("Regeneracja", "Trendy snu, tętna, HRV i wagi"), unsafe_allow_html=True)
+    regeneracja.widok_regeneracji()
 
 # ---------------------------------------------------------------
 # WIDOK: WŁASNY TRENING (formularz z bazą ćwiczeń)
@@ -388,15 +431,25 @@ def widok_wlasny_trening():
     if "blad_zapisu" in st.session_state:
         st.error(st.session_state.pop("blad_zapisu"))
 
-    # Górny rząd: data, rodzaj treningu i waga ciała
-    kol_data, kol_typ, kol_waga = st.columns(3)
+    # Preset (zarazem nazwa treningu), pod nim data i waga ciała
+    wczytaj_presety_startowe()
+    opcje_presetow = [sesja_treningowa.BRAK_RODZAJU] + lista_presetow()["Nazwa"].tolist()
+    st.selectbox("Preset", opcje_presetow, key="typ_treningu",
+                 help="Którą rozpiskę trenowałeś. Bez presetu trening zapisze się bez nazwy.")
+    kol_data, kol_waga = st.columns(2)
     kol_data.date_input("Data treningu", value=date.today(), key="data_treningu", format="DD.MM.YYYY")
-    kol_typ.selectbox("Rodzaj treningu", RODZAJE_TRENINGU, key="typ_treningu")
     kol_waga.number_input(
         "Waga ciała (kg)", min_value=30.0, max_value=200.0, value=88.0,
         step=0.1, format="%.1f", key="waga_ciala",
     )
 
+    # Pola ćwiczenia (obciążenie, serie, wartość) w jednym rzędzie także na telefonie
+    st.markdown(
+        "<style>[class*='st-key-blok_cwiczenia_'] [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;gap:8px !important;}"
+        "[class*='st-key-blok_cwiczenia_'] [data-testid='stColumn'],[class*='st-key-blok_cwiczenia_'] [data-testid='column']"
+        "{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}</style>",
+        unsafe_allow_html=True,
+    )
     # Jeden blok na każde ćwiczenie; liczba bloków rośnie po kliknięciu ➕
     for i in range(st.session_state["liczba_cwiczen"]):
         with st.container(border=True, key=f"blok_cwiczenia_{i}"):
@@ -406,13 +459,26 @@ def widok_wlasny_trening():
                 "Ćwiczenie", BAZA_CWICZEN, index=None,
                 placeholder="Wybierz lub zacznij pisać nazwę...", key=f"cw_{i}",
             )
-            kol_ciezar, kol_serie, kol_powt = st.columns(3)
-            kol_ciezar.number_input(
-                "Ciężar (kg)", min_value=0.0, max_value=500.0, value=60.0,
-                step=2.5, format="%.1f", key=f"ci_{i}",
+            st.selectbox(
+                "Jednostka (w czym liczysz)", list(sesja_treningowa.JEDNOSTKI_WYBOR), key=f"jd_{i}",
+                help="Automatycznie: jak ostatnio zapisywałeś to ćwiczenie (rower i bieganie: minuty, plank: sekundy), "
+                     "a gdy robisz je pierwszy raz: powtórzenia.",
             )
-            kol_serie.number_input("Serie", min_value=1, max_value=20, value=4, step=1, key=f"se_{i}")
-            kol_powt.number_input("Powtórzenia", min_value=1, max_value=100, value=5, step=1, key=f"po_{i}")
+            u = jednostka_bloku(i)
+            ciezar0, serie0, wartosc0 = sesja_treningowa.domyslne_formularza(u)
+            # Klucze pól zawierają jednostkę, więc po zmianie jednostki pola dostają wartości startowe dla niej
+            if u == "min":    # cardio w minutach: bez obciążenia
+                kol_serie, kol_powt = st.columns(2)
+            else:
+                kol_ciezar, kol_serie, kol_powt = st.columns(3)
+                kol_ciezar.number_input(
+                    "Ciężar (kg)" if sesja_treningowa.jednostka_powtorzen(u) else "Ciężar (kg, opcj.)",
+                    min_value=0.0, max_value=500.0, value=ciezar0, step=2.5, format="%.1f", key=f"ci_{i}_{u}",
+                )
+            kol_serie.number_input("Serie", min_value=1, max_value=20, value=serie0, step=1, key=f"se_{i}_{u}")
+            kol_powt.number_input(
+                sesja_treningowa._etykieta_wartosci(u), min_value=1, max_value=10000, value=wartosc0, step=1, key=f"po_{i}_{u}",
+            )
             st.text_input(
                 "Komentarz do ćwiczenia",
                 placeholder="np. RPE 8, ostatnia seria ciężko",
@@ -442,21 +508,20 @@ def widok_wlasny_trening():
 def strona_historia():
     st.markdown(naglowek_strony("Historia i Kalendarz"), unsafe_allow_html=True)
     st.subheader("Historia Treningów")
+    sesja_treningowa.widok_historii()
 
-    historia_sesji = wczytaj_historie_sesji()
-
-    if historia_sesji.empty:
-        st.info("Brak zapisanych treningów. Dodaj pierwszy w zakładce Treningi.")
-    else:
-        st.dataframe(historia_sesji, use_container_width=True, hide_index=True)
+    historia_sesji = baza.wczytaj_historie_sesji()
+    if not historia_sesji.empty:
+        with st.expander("Pełna tabela (surowe dane)"):
+            st.dataframe(historia_sesji, use_container_width=True, hide_index=True)
 
     # Stare wpisy z wersji z jednym ćwiczeniem zostają w archiwum
-    stare_wpisy = wczytaj_historie()
+    stare_wpisy = baza.wczytaj_historie()
     if not stare_wpisy.empty:
         with st.expander("Archiwum: stare wpisy z poprzedniej wersji"):
             st.dataframe(stare_wpisy, use_container_width=True, hide_index=True)
 
-    wpisy = wczytaj_ostatnie_samopoczucie(30)
+    wpisy = baza.wczytaj_ostatnie_samopoczucie(30)
     with st.expander(f"Samopoczucie: zapisane wpisy ({len(wpisy)})"):
         if wpisy.empty:
             st.caption("Brak wpisów. Dodasz je na stronie Start.")
@@ -519,6 +584,8 @@ def widok_presetow():
     )
     if st.button("Edytuj preset", use_container_width=True):
         okno_edycji_presetu(preset_id, wiersz["Nazwa"])
+        st.button("Rozpocznij ten trening", type="primary", use_container_width=True, key="presety_start",
+              on_click=sesja_treningowa.rozpocznij_z_presetu, args=(preset_id,))
 
 
 def widok_asystenta():
@@ -527,6 +594,7 @@ def widok_asystenta():
 
 
 TRYBY_TRENINGU = {
+    "start": ("Rozpocznij trening", "Prowadzony trening seria po serii z licznikiem przerw.", sesja_treningowa.widok_startu),
     "wlasny": ("Własny trening", "Zapisz trening od zera: ćwiczenia, ciężary, serie.", widok_wlasny_trening),
     "presety": ("Presety", "Gotowe rozpiski, które możesz edytować.", widok_presetow),
     "asystent": ("Trening od asystenta", "Propozycja dopasowana do Ciebie. Wkrótce.", widok_asystenta),
@@ -542,7 +610,9 @@ def przelacz_tryb_treningu(klucz: str) -> None:
 
 
 def strona_treningi():
-    st.markdown(naglowek_strony("Treningi"), unsafe_allow_html=True)    
+    st.markdown(naglowek_strony("Treningi"), unsafe_allow_html=True)
+    if sesja_treningowa.widok_jesli_aktywna():
+        return
     st.session_state.setdefault("tryb_treningu", None)   # na starcie nic nie jest wybrane
     aktywny = st.session_state["tryb_treningu"]
 
@@ -571,19 +641,136 @@ def strona_treningi():
         TRYBY_TRENINGU[aktywny][2]()
 
 
+# Pierwsza pozycja listy presetów w planie: dzień treningowy bez narzuconego presetu
+BRAK_TYPU = "— dowolny —"
+
+
+def _pasek_tygodnia_html(plan) -> str:
+    """Siedem kwadratów Pn-Nd: ciemny = trening, jasny = odpoczynek."""
+    elementy = []
+    for _, d in plan.iterrows():
+        akt = bool(d["Aktywny"])
+        tlo = "#1B1B1A" if akt else "#F4ECDC"
+        tekst = "#E9DFCB" if akt else "#6B6355"
+        podpis = (nazwa_krotka(d["Typ"]) or "trening") if akt else "wolne"
+        elementy.append(
+            f'<div style="flex:1;min-width:0;text-align:center;padding:12px 4px;border-radius:14px;'
+            f'border:2px solid #BFAE86;background:{tlo};color:{tekst};">'
+            f'<div style="font-weight:700;">{SKROTY_DNI[int(d["Dzien"])]}</div>'
+            f'<div style="font-size:0.72rem;opacity:0.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{podpis}</div>'
+            f'</div>'
+        )
+    return f'<div style="display:flex;gap:8px;margin:4px 0 18px 0;">{"".join(elementy)}</div>'
+
+
+def strona_plan():
+    st.markdown(naglowek_strony("Mój plan", "Twój typowy tydzień treningowy"), unsafe_allow_html=True)
+    plan = wczytaj_plan()
+    st.markdown(_pasek_tygodnia_html(plan), unsafe_allow_html=True)
+    wczytaj_presety_startowe()
+    lista_p = lista_presetow()
+
+    with st.form("formularz_planu"):
+        wyniki = []
+        for _, d in plan.iterrows():
+            i = int(d["Dzien"])
+            with st.container(border=True, key=f"plan_dzien_{i}"):
+                k_dzien, k_trening, k_typ, k_godz, k_notatka = st.columns([1.3, 1, 2, 1.2, 2.5], vertical_alignment="center")
+                k_dzien.markdown(f"**{NAZWY_DNI[i]}**")
+                aktywny = k_trening.toggle("Trening", value=bool(d["Aktywny"]), key=f"plan_akt_{i}")
+                opcje = [BRAK_TYPU] + lista_p["Nazwa"].tolist()
+                # stary wpis planu (rodzaj, np. "Góra Push") pokazujemy jako pasujący preset
+                obecny = sesja_treningowa.preset_z_etykiety(lista_p, d["Typ"]) or d["Typ"]
+                if obecny and obecny not in opcje:
+                    opcje.append(obecny)            # preset usunięty z listy nie ginie po cichu
+                typ = k_typ.selectbox(
+                    "Preset", opcje, key=f"plan_typ_{i}", label_visibility="collapsed",
+                    index=opcje.index(obecny) if obecny in opcje else 0,
+                )
+                godz_start = datetime.strptime(d["Godzina"], "%H:%M").time() if d["Godzina"] else None
+                godz = k_godz.time_input(
+                    "Godzina", value=godz_start, key=f"plan_godz_{i}", label_visibility="collapsed", step=900,
+                )
+                notatka = k_notatka.text_input(
+                    "Notatka", value=d["Notatka"], key=f"plan_not_{i}", label_visibility="collapsed",
+                    placeholder="Notatka (np. siłownia, z kolegą)",
+                )
+                wyniki.append({
+                    "Dzien": i, "Aktywny": aktywny, "Typ": "" if typ == BRAK_TYPU else typ,
+                    "Godzina": godz.strftime("%H:%M") if godz else "", "Notatka": notatka,
+                })
+        zapisano = st.form_submit_button("Zapisz plan", type="primary")
+
+    if zapisano:
+        zapisz_plan(wyniki)
+        st.toast("Plan zapisany.")
+        st.rerun()
+
+
+# ---------------------------------------------------------------
+# STRONA: DZISIEJSZY TRENING (pojawia się w menu tylko w dni treningowe z planu)
+# ---------------------------------------------------------------
+def strona_dzisiejszy_trening():
+    plan_dzis = plan_na_dzien()
+    podtytul = plan_dzis["Typ"] or "Trening dowolny"
+    if plan_dzis["Godzina"]:
+        podtytul += f" · {plan_dzis['Godzina']}"
+    st.markdown(naglowek_strony("Trening na dziś", html.escape(podtytul)), unsafe_allow_html=True)
+    if sesja_treningowa.widok_jesli_aktywna():
+        return
+    if plan_dzis["Notatka"]:
+        st.caption(f"Notatka z planu: {plan_dzis['Notatka']}")
+    if trening_zapisany():
+        st.success("Dzisiejszy trening jest już zapisany. Możesz dodać kolejny.")
+    sesja_treningowa.widok_startu(plan_dzis["Typ"])
+    plan_preset = sesja_treningowa.preset_z_etykiety(lista_presetow(), plan_dzis["Typ"])
+    if plan_preset and "typ_treningu" not in st.session_state:
+        st.session_state["typ_treningu"] = plan_preset
+    with st.expander("Wolisz wpisać trening ręcznie, po fakcie?"):
+        widok_wlasny_trening()
+
+
+def strona_postepy():
+    st.markdown(naglowek_strony("Postępy", "Rekordy, objętość i trendy w ćwiczeniach"), unsafe_allow_html=True)
+    postepy.widok_postepow()
+
 # MENU BOCZNE
 # ---------------------------------------------------------------
 # Lista stron: funkcja, nazwa w menu i ikona (Material Symbols)
-strony = [
-    st.Page(strona_start, title="Start", icon=":material/home:", default=True),
+plan_dzis = plan_na_dzien()
+strony = [st.Page(strona_start, title="Start", icon=":material/home:", default=True)]
+if plan_dzis["Aktywny"]:
+    zrobiony_dzis = trening_zapisany()
+    strony.append(st.Page(
+        strona_dzisiejszy_trening,
+        title=f"Dziś: {nazwa_krotka(plan_dzis['Typ']) or 'trening'}" + (" ✓" if zrobiony_dzis else ""),
+        icon=":material/check_circle:" if zrobiony_dzis else ":material/play_circle:",
+        url_path="dzis",
+    ))
+strony += [
     st.Page(strona_regeneracja, title="Regeneracja", icon=":material/bedtime:"),
     st.Page(strona_treningi, title="Treningi", icon=":material/fitness_center:"),
+    st.Page(strona_postepy, title="Postępy", icon=":material/trending_up:"),
     st.Page(strona_historia, title="Historia i Kalendarz", icon=":material/calendar_month:"),
+    st.Page(strona_plan, title="Mój plan", icon=":material/event_note:"),
 ]
 wybrana = st.navigation(strony)
 
 # Dół menu: połączenie z Garminem i ustawienia (pojawia się pod listą stron)
 with st.sidebar:
+    plan_jutro = plan_na_dzien(date.today() + timedelta(days=1))
+    if plan_jutro["Aktywny"]:
+        opis_jutro = html.escape(plan_jutro["Typ"] or "trening")
+        if plan_jutro["Godzina"]:
+            opis_jutro += f" · {plan_jutro['Godzina']}"
+        st.markdown(
+            '<div style="margin-top:8px;padding:10px 14px;border:2px solid #BFAE86;border-radius:12px;background:#F4ECDC;">'
+            '<div style="font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;color:#6B6355;">Jutro w planie</div>'
+            f'<div style="font-weight:700;color:#1B1B1A;">{opis_jutro}</div></div>',
+            unsafe_allow_html=True,
+        )
+        if sesja_treningowa.aktywna():
+         st.markdown('<div style="margin-top:8px;padding:10px 14px;border:2px solid #3F9A5A;border-radius:12px;background:#F4ECDC;font-weight:700;color:#1B1B1A;">Trening w toku<div style="font-weight:400;font-size:0.8rem;color:#6B6355;">wróć do zakładki Treningi</div></div>', unsafe_allow_html=True)
     st.divider()
     with st.expander("⚙️ Ustawienia i połączenie"):
         st.caption("Status połączenia widać na stronie Start.")
@@ -591,4 +778,4 @@ with st.sidebar:
         st.caption("Dane logowania do Garmina są w pliku .env na tym komputerze.")
 
 # Uruchamia wybraną stronę. Musi być na końcu, po definicjach wszystkich funkcji.
-wybrana.run()
+wybrana.run()
