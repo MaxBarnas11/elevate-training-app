@@ -21,11 +21,16 @@ import pandas as pd
 import streamlit as st
 
 import baza
+import powiadomienia
 from karty import (
     KOLOR_KARTY, KOLOR_OBRAMOWANIA, KOLOR_PRZYGASZONY, KOLOR_TEKSTU, KOLOR_TLA_PIERSCIENIA,
-    NIEBIESKI, POMARANCZOWY, ZIELONY,
+    CZERWONY, NIEBIESKI, POMARANCZOWY, ZIELONY,
     _naglowek_karty, _tlo_karty,
 )
+from motywy import v as _kolor_motywu
+
+KOLOR_PRZERWY = _kolor_motywu("przerwa")     # odliczanie przerwy
+KOLOR_SERII = _kolor_motywu("serie")         # licznik serii
 
 # ---------------------------------------------------------------
 # Ustawienia
@@ -37,6 +42,21 @@ PRZERWA_ROZGRZEWKA = 60                  # sekundy przerwy po serii rozgrzewkowe
 SCHEMAT_ROZGRZEWKI = ((0.5, 5), (0.7, 3), (0.85, 1))   # (część ciężaru roboczego, powtórzenia)
 OPCJE_PRZERWY = {"Auto": None, "60 s": 60, "90 s": 90, "2 min": 120, "3 min": 180, "Wył.": 0}
 OPCJE_RPE = list(range(1, 11))
+
+
+def rzad_w_jednej_linii(klucz: str) -> None:
+    """Rząd przycisków (segmenty, pigułki) o danym kluczu w jednej linii: małe wcięcia, napisy nigdy nie są ucinane
+    (przyciski mają szerokość napisu i rozciągają się na wolne miejsce), a gdy rząd jest za szeroki, przewija się w bok."""
+    st.markdown(
+        f"<style>.st-key-{klucz} [data-testid='stButtonGroup']{{flex-wrap:nowrap !important;gap:4px !important;"
+        f"overflow-x:auto;scrollbar-width:none;}}"
+        f".st-key-{klucz} [data-testid='stButtonGroup']::-webkit-scrollbar{{display:none;}}"
+        f".st-key-{klucz} button{{padding:0.3rem 0.45rem !important;min-height:0 !important;white-space:nowrap;"
+        f"flex:1 0 auto !important;overflow:visible !important;}}"
+        f".st-key-{klucz} button p{{font-size:0.85rem !important;white-space:nowrap !important;overflow:visible !important;"
+        f"text-overflow:clip !important;}}</style>",
+        unsafe_allow_html=True,
+    )
 JEDNOSTKI_POWTORZEN = ("powt.", "powt./nogę", "powt./stronę")
 # Wybór jednostki przy dodawaniu i zamianie ćwiczenia (None = ustal automatycznie z historii, a bez historii: powtórzenia)
 JEDNOSTKI_WYBOR = {
@@ -119,6 +139,8 @@ def zapisz_stan(stan: dict | None) -> None:
         else:
             db.execute("INSERT OR REPLACE INTO trening_w_toku (id, Dane) VALUES (1, ?)", (json.dumps(stan, ensure_ascii=False),))
         db.commit()
+    # budzik „koniec przerwy” (push); każda zmiana przerwy (seria, +30 s, Pomiń, wyłączenie) przechodzi przez zapis stanu
+    powiadomienia.synchronizuj_przerwe(stan.get("przerwa_do") if stan else None, powiadomienia_przerwy_wlaczone())
 
 
 def wczytaj_ustawienie(klucz: str, domyslna: str = "") -> str:
@@ -127,6 +149,14 @@ def wczytaj_ustawienie(klucz: str, domyslna: str = "") -> str:
     with closing(_polacz()) as db:
         w = db.execute("SELECT Wartosc FROM ustawienia WHERE Klucz = ?", (klucz,)).fetchone()
     return w[0] if w and w[0] is not None else domyslna
+
+
+def powiadomienia_przerwy_wlaczone() -> bool:
+    """Czy wysyłać push o końcu przerwy (domyślnie tak, o ile powiadomienia są skonfigurowane)."""
+    try:
+        return wczytaj_ustawienie("push_przerwa", "1") != "0"
+    except Exception:
+        return True
 
 
 def zapisz_ustawienie(klucz: str, wartosc: str) -> None:
@@ -656,6 +686,7 @@ def zapisz_trening(stan: dict, komentarz: str = "", waga: float | None = None, t
                 )
         db.execute("DELETE FROM trening_w_toku WHERE id = 1")
         db.commit()
+    powiadomienia.anuluj("przerwa")
     return sesja_id
 
 
@@ -827,6 +858,66 @@ def rekordy_treningu(stan: dict) -> dict:
         porownanie = {"data": poprz["data"], "objetosc": teraz_obj, "objetosc_poprz": poprz["objetosc"],
                       "proc": proc, "serie": teraz_serie, "serie_poprz": poprz["serie"]}
     return {"rekordy": rekordy, "porownanie": porownanie}
+
+
+# --- partie mięśniowe ćwiczeń ------------------------------------------------
+def lista_partii() -> list[str]:
+    """Partie z bazy ćwiczeń (w kolejności pierwszego wystąpienia); „Inne” zawsze na końcu."""
+    try:
+        with closing(_polacz()) as db:
+            wiersze = db.execute("SELECT Partia FROM cwiczenia WHERE COALESCE(Partia, '') <> '' ORDER BY rowid").fetchall()
+    except sqlite3.OperationalError:
+        wiersze = []
+    wynik: list[str] = []
+    for (partia,) in wiersze:
+        if partia != "Inne" and partia not in wynik:
+            wynik.append(partia)
+    return wynik + ["Inne"]
+
+
+def dopisz_cwiczenie_do_bazy(nazwa: str, partia: str | None = None) -> None:
+    """Nowe ćwiczenie trafia do bazy ćwiczeń z wybraną partią (domyślnie „Inne”). Istniejącego nie zmienia."""
+    with closing(_polacz()) as db:
+        db.execute("INSERT OR IGNORE INTO cwiczenia (Nazwa, Partia) VALUES (?, ?)", (nazwa, partia or "Inne"))
+        db.commit()
+
+
+# --- ujednolicenie nazw starych treningów -------------------------------------
+def plan_przemianowania() -> list[dict]:
+    """Treningi, których nazwa nie jest nazwą presetu, a da się ją jednoznacznie przypisać: po zapisanej nazwie presetu
+    albo po dawnym rodzaju, gdy pasuje do dokładnie jednego presetu (np. „Góra Siła”). Niejednoznaczne (np. samo „Cardio”) pomijamy."""
+    from presety import lista_presetow
+    lp = lista_presetow()
+    nazwy = set(lp["Nazwa"])
+    po_rodzaju: dict[str, list[str]] = {}
+    for _, w in lp.iterrows():
+        po_rodzaju.setdefault(str(w["Typ"] or ""), []).append(str(w["Nazwa"]))
+    przygotuj_tabele()
+    with closing(_polacz()) as db:
+        wiersze = db.execute("SELECT id, Data, COALESCE(Typ_treningu, ''), COALESCE(Preset, '') FROM sesje ORDER BY Data, id").fetchall()
+    wynik = []
+    for sesja_id, data, typ, preset in wiersze:
+        if typ in nazwy:
+            continue
+        nowa = preset.removesuffix(" (jak ostatnio)")
+        if nowa not in nazwy:
+            kandydaci = po_rodzaju.get(typ, []) if typ else []
+            nowa = kandydaci[0] if len(kandydaci) == 1 else None
+        if nowa:
+            wynik.append({"id": sesja_id, "data": data, "stare": typ, "nowe": nowa})
+    return wynik
+
+
+def przemianuj_stare_treningi() -> int:
+    """Zmienia nazwy treningów z `plan_przemianowania`. Przed zmianą robi kopię bazy (nie jest sprzątana automatycznie)."""
+    plan = plan_przemianowania()
+    if not plan:
+        return 0
+    kopia_bazy("przed_przemianowaniem")
+    with closing(_polacz()) as db:
+        db.executemany("UPDATE sesje SET Typ_treningu = ? WHERE id = ?", [(w["nowe"], w["id"]) for w in plan])
+        db.commit()
+    return len(plan)
 
 
 # --- kopie zapasowe, usuwanie i edycja zapisanych treningów ------------------
@@ -1037,7 +1128,7 @@ def pasek_sesji_html(stan: dict, teraz: datetime) -> str:
         pasek = _pasek(100 * zrobione / plan if plan else 0, ZIELONY, 6)
     elif zostalo > 0:
         dl = max(int(stan.get("przerwa_dl") or 0), zostalo)
-        kolor = POMARANCZOWY if zostalo <= 10 else NIEBIESKI
+        kolor = CZERWONY if zostalo <= 10 else KOLOR_PRZERWY
         glowny, opis = format_czasu(zostalo), "Przerwa"
         pasek = _pasek(100 * zostalo / dl, kolor, 6)
     else:
@@ -1045,18 +1136,20 @@ def pasek_sesji_html(stan: dict, teraz: datetime) -> str:
         pasek = _pasek(100, ZIELONY, 6)
 
     def kolumna(podpis: str, wartosc: str, kol: str, flex: str, rozmiar: str = "1.35rem") -> str:
+        # Stała wysokość wiersza z wartością, żeby podpisy nad liczbami były na tej samej wysokości mimo różnych rozmiarów liczb
         return (f'<div style="flex:{flex};min-width:0;text-align:center;line-height:1.15;">'
                 f'<div style="font-size:0.7rem;color:{KOLOR_PRZYGASZONY};">{podpis}</div>'
-                f'<div style="font-size:{rozmiar};font-weight:700;color:{kol};white-space:nowrap;">{wartosc}</div></div>')
+                f'<div style="display:flex;align-items:center;justify-content:center;height:1.9rem;font-size:{rozmiar};'
+                f'font-weight:700;color:{kol};white-space:nowrap;">{wartosc}</div></div>')
 
     czas = format_czasu(czas_trwania(stan, teraz).total_seconds())
-    return _ramka(kolor, (
-        '<div style="display:flex;align-items:center;gap:8px;">'
+    return '<div style="margin-bottom:10px;">' + _ramka(kolor, (
+        '<div style="display:flex;align-items:flex-start;gap:8px;">'
         + kolumna("Czas treningu", czas, KOLOR_TEKSTU, "1")
         + kolumna(opis, glowny, kolor, "1.3", "1.6rem" if glowny != "wyłączona" else "1rem")
-        + kolumna("Serie", f"{zrobione}/{plan}", KOLOR_TEKSTU, "1")
+        + kolumna("Serie", f"{zrobione}/{plan}", KOLOR_SERII, "1")
         + f'</div><div style="margin-top:6px;">{pasek}</div>'
-    ), "8px 12px")
+    ), "8px 12px") + '</div>'
 
 
 def licznik_html(stan: dict, teraz: datetime) -> str:
@@ -1066,7 +1159,7 @@ def licznik_html(stan: dict, teraz: datetime) -> str:
         kolor, glowny, opis, proc = NIEBIESKI, "–", "po zapisaniu serii ruszy odliczanie", 0
     elif zostalo > 0:
         dl = max(int(stan.get("przerwa_dl") or 0), zostalo)
-        kolor = POMARANCZOWY if zostalo <= 10 else NIEBIESKI
+        kolor = CZERWONY if zostalo <= 10 else KOLOR_PRZERWY
         glowny, opis, proc = format_czasu(zostalo), "do kolejnej serii", 100 * zostalo / dl
     else:
         kolor, glowny, opis, proc = ZIELONY, "Gotowe", "możesz robić kolejną serię", 100
@@ -1262,6 +1355,31 @@ def _zapisz_serie(nr: int) -> None:
     zapisz_stan(stan)
 
 
+def opis_serii_krotko(s: dict, jednostka: str) -> str:
+    """Jedna seria w skrócie, np. „80 kg × 5 · RPE 8”, „20 min”."""
+    tekst = format_powt(s["powt"], jednostka)
+    if s["ciezar"]:
+        tekst = f"{format_kg(s['ciezar'])} kg × {tekst}"
+    if s.get("rpe"):
+        tekst += f" · RPE {s['rpe']}"
+    return tekst
+
+
+def _powtorz_serie(nr: int) -> None:
+    """Zapisuje serię identyczną z ostatnią roboczą (z jej RPE). Pola zostają na tych wartościach, RPE się czyści."""
+    s, stan = st.session_state, _stan()
+    if stan is None:
+        return
+    rob = serie_robocze(stan["cwiczenia"][nr])
+    if not rob:
+        return
+    ostatnia = rob[-1]
+    dodaj_serie(stan, nr, ostatnia["ciezar"], ostatnia["powt"], ostatnia.get("rpe"), ustawienie_przerwy(stan))
+    s[f"sesja_ci_{nr}"], s[f"sesja_po_{nr}"] = float(ostatnia["ciezar"]), int(ostatnia["powt"])
+    s[f"sesja_rpe_{nr}"] = None
+    zapisz_stan(stan)
+
+
 def _domyslne_pola(c: dict, rozgrzewka: bool = False) -> tuple[float, int]:
     """Wartości w polach: ostatnia seria robocza albo propozycja z historii; dla rozgrzewki kolejny krok schematu."""
     rob = serie_robocze(c)
@@ -1394,9 +1512,7 @@ def _dodaj_cwiczenie() -> None:
     if not nazwa:
         _blad("Wybierz ćwiczenie z listy albo wpisz własną nazwę.")
         return
-    with closing(_polacz()) as db:
-        db.execute("INSERT OR IGNORE INTO cwiczenia (Nazwa, Partia) VALUES (?, 'Inne')", (nazwa,))
-        db.commit()
+    dopisz_cwiczenie_do_bazy(nazwa, s.get("sesja_dodaj_partia"))
     jednostka = JEDNOSTKI_WYBOR.get(s.get("sesja_dodaj_jednostka") or "Automatycznie") or jednostka_domyslna(nazwa)
     c = nowe_cwiczenie(nazwa, jednostka=jednostka)
     ustaw_cel(c, *_odczytaj_cel("sesja_dodaj"))
@@ -1404,6 +1520,7 @@ def _dodaj_cwiczenie() -> None:
     dolacz_cwiczenie(stan, c)
     _wyczysc_pola()
     s["sesja_dodaj_wybor"], s["sesja_dodaj_nowe"], s["sesja_dodaj_jednostka"] = None, "", "Automatycznie"
+    s["sesja_dodaj_partia"] = "Inne"
     _wyczysc_cel("sesja_dodaj")
     zapisz_stan(stan)
 
@@ -1417,18 +1534,21 @@ def _zamien_cwiczenie() -> None:
     if not nazwa:
         s["sesja_zam_blad"] = "Wybierz ćwiczenie z listy albo wpisz własną nazwę."
         return
-    with closing(_polacz()) as db:
-        db.execute("INSERT OR IGNORE INTO cwiczenia (Nazwa, Partia) VALUES (?, 'Inne')", (nazwa,))
-        db.commit()
+    dopisz_cwiczenie_do_bazy(nazwa, s.get("sesja_zam_partia"))
     jednostka = JEDNOSTKI_WYBOR.get(s.get("sesja_zam_jednostka") or "Automatycznie") or jednostka_domyslna(nazwa)
     zamien_cwiczenie(stan, nr, nazwa, jednostka)
     ustaw_cel(stan["cwiczenia"][nr], *_odczytaj_cel("sesja_zam"))
     stan["cwiczenia"][nr]["propozycja"] = zaproponuj(stan["cwiczenia"][nr])
     _wyczysc_pola()
     s["sesja_zam_wybor"], s["sesja_zam_nowe"], s["sesja_zam_jednostka"] = None, "", "Automatycznie"
+    s["sesja_zam_partia"] = "Inne"
     _wyczysc_cel("sesja_zam")
     s["sesja_zam_zamknij"] = True   # okno zamknie się przy następnym przebiegu (patrz _okno_zamiany)
     zapisz_stan(stan)
+
+
+def _zapisz_push_przerwy() -> None:
+    zapisz_ustawienie("push_przerwa", "1" if st.session_state.get("start_push_przerwa") else "0")
 
 
 def _ustaw_przerwe() -> None:
@@ -1553,13 +1673,13 @@ CSS_PASEK = (
     "[data-testid='stMainBlockContainer'],[data-testid='stAppViewBlockContainer'],.stMain .block-container,.block-container"
     "{padding-top:4rem !important;}"
     ".st-key-sesja_pasek,[data-testid='stLayoutWrapper']:has(> .st-key-sesja_pasek){position:sticky;top:3.75rem;z-index:100;}"
-    ".st-key-sesja_pasek{background:rgba(233,223,203,0.97);padding:6px 4px 8px 4px;border-radius:0 0 16px 16px;"
-    "gap:0.4rem !important;margin-bottom:0.6rem;box-shadow:0 8px 10px -8px rgba(60,45,20,0.45);}"
+    ".st-key-sesja_pasek{background:var(--e-pasek);padding:6px 4px 8px 4px;border-radius:0 0 16px 16px;"
+    "gap:0.4rem !important;margin-bottom:0.6rem;box-shadow:0 8px 10px -8px var(--e-cien_pasek);}"
     ".st-key-sesja_pasek [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;gap:8px !important;}"
     ".st-key-sesja_pasek [data-testid='stColumn'],.st-key-sesja_pasek [data-testid='column']"
     "{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}"
     ".st-key-sesja_pasek button{min-height:2.4rem;padding:0 0.3rem;font-size:0.9rem;}"
-    "@media (max-width:768px){[data-testid='stHeader']{background:rgba(233,223,203,0.92) !important;"
+    "@media (max-width:768px){[data-testid='stHeader']{background:var(--e-naglowek) !important;"
     "-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);}}"
     "</style>"
 )
@@ -1582,7 +1702,7 @@ CSS_LISTA = (
     "{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}"
     ".st-key-sesja_lista button{min-height:2.3rem;padding:0 0.3rem;font-size:0.9rem;}"
     ".st-key-sesja_lista [class*='st-key-sesja_lu_'] button,.st-key-sesja_lista [class*='st-key-sesja_lt_'] button"
-    "{color:#C0392B;border-color:#E2B4AE;}"
+    "{color:var(--e-kasuj);border-color:var(--e-kasuj_ramka);}"
     "</style>"
 )
 
@@ -1639,11 +1759,14 @@ def _okno_zamiany() -> None:
         st.error(s.pop("sesja_zam_blad"))
     st.selectbox("Ćwiczenie z bazy", baza.lista_cwiczen(), index=None, placeholder="Wybierz lub zacznij pisać...", key="sesja_zam_wybor")
     st.text_input("...albo wpisz własne ćwiczenie", placeholder="np. Przysiad bułgarski", key="sesja_zam_nowe")
+    st.selectbox("Partia (tylko dla nowego, własnego ćwiczenia)", lista_partii(), index=len(lista_partii()) - 1, key="sesja_zam_partia",
+                 help="Do której partii mięśniowej zaliczyć nowe ćwiczenie. Dzięki temu liczy się w „Serie na partię” w Postępach. "
+                      "Dla ćwiczenia wybranego z bazy ta wartość jest pomijana.")
     st.selectbox("Jednostka (w czym liczysz)", list(JEDNOSTKI_WYBOR), key="sesja_zam_jednostka",
                  help="Automatycznie: jak ostatnio zapisywałeś to ćwiczenie, a gdy robisz je pierwszy raz: powtórzenia.")
     _pola_celu("sesja_zam")
-    st.button("Zamień", type="primary", use_container_width=True, on_click=_zamien_cwiczenie, key="sesja_zam_btn")
-    st.caption("Zapisane już serie zostają przy tym ćwiczeniu.")
+    st.button("Zamień", type="primary", use_container_width=True, on_click=_zamien_cwiczenie, key="sesja_zam_btn",
+              help="Zapisane już serie zostają przy tym ćwiczeniu.")
 
 
 # Trzy małe przyciski w jednym rzędzie także na telefonie (Streamlit domyślnie układa kolumny jedna pod drugą).
@@ -1652,7 +1775,7 @@ CSS_PRZYCISKI_NAV = (
     ".st-key-sesja_nav [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;gap:10px !important;}"
     ".st-key-sesja_nav [data-testid='stColumn'],.st-key-sesja_nav [data-testid='column']{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}"
     ".st-key-sesja_nav button{min-height:3rem;font-size:1.4rem;font-weight:700;}"
-    ".st-key-sesja_cofnij button:not(:disabled){color:#C0392B;border-color:#E2B4AE;}"
+    ".st-key-sesja_cofnij button:not(:disabled){color:var(--e-kasuj);border-color:var(--e-kasuj_ramka);}"
     ".st-key-kafelek_sesja_cw [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;gap:10px !important;}"
     ".st-key-kafelek_sesja_cw [data-testid='stColumn'],.st-key-kafelek_sesja_cw [data-testid='column']{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}"
     "</style>"
@@ -1660,8 +1783,7 @@ CSS_PRZYCISKI_NAV = (
 
 
 # RPE w jednym rzędzie: dziesięć małych przycisków, kolor od zielonego (lekko) przez żółty do czerwonego (maksimum).
-KOLORY_RPE = ["#5BA05E", "#6FAA55", "#86B04C", "#A3B340", "#C4B238", "#D9A82F", "#E0912B", "#E07A2A", "#D95F2B", "#C8402F"]
-CIEMNY_TEKST_RPE = {4, 5, 6}   # na żółtym tle czytelniejszy ciemny napis
+# Kolory skali RPE i napisów na nich są w motywy.py (zmienne --e-rpe_N i --e-rpe_t_N, osobne dla motywu jasnego i ciemnego).
 
 
 def _css_rpe() -> str:
@@ -1670,11 +1792,11 @@ def _css_rpe() -> str:
         ".st-key-sesja_rpe_rzad [data-testid='stColumn'],.st-key-sesja_rpe_rzad [data-testid='column']"
         "{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}",
         ".st-key-sesja_rpe_rzad button{min-height:2.3rem;padding:0 !important;font-size:0.9rem;font-weight:600;"
-        "border-width:2px;background:#F4ECDC;color:#1B1B1A;}",
+        "border-width:2px;background:var(--e-karta);color:var(--e-tekst);}",
     ]
-    for i, kolor in enumerate(KOLORY_RPE, start=1):
+    for i in range(1, 11):
+        kolor, tekst = f"var(--e-rpe_{i - 1})", f"var(--e-rpe_t_{i - 1})"
         reguly.append(f".st-key-sesja_rpe_rzad [class*='st-key-sesja_rpb_{i}_'] button{{border-color:{kolor};}}")
-        tekst = "#1B1B1A" if i in CIEMNY_TEKST_RPE else "#FFFFFF"
         reguly.append(f".st-key-sesja_rpe_rzad [class*='st-key-sesja_rpb_{i}_'][class*='_zaznaczone'] button"
                       f"{{background:{kolor};color:{tekst};border-color:{kolor};}}")
     return "<style>" + "".join(reguly) + "</style>"
@@ -1716,6 +1838,10 @@ def _widok_cwiczenia(stan: dict) -> None:
         st.button("Zapisz serię rozgrzewkową" if rozgrzewka else f"Zapisz serię {len(serie_robocze(c)) + 1}",
                   type="secondary" if rozgrzewka else "primary", use_container_width=True,
                   key=f"sesja_zapisz_{nr}", on_click=_zapisz_serie, args=(nr,))
+        if not rozgrzewka and serie_robocze(c):
+            st.button(f"Powtórz poprzednią: {opis_serii_krotko(serie_robocze(c)[-1], c['jednostka'])}", use_container_width=True,
+                      key=f"sesja_powtorz_{nr}", on_click=_powtorz_serie, args=(nr,),
+                      help="Zapisuje od razu serię identyczną z poprzednią (ciężar, powtórzenia i RPE) i włącza przerwę.")
 
     zrobione = len(serie_robocze(c)) >= c["serie_plan"]
     with st.container(key="sesja_nav"):
@@ -1735,8 +1861,8 @@ def _widok_cwiczenia(stan: dict) -> None:
     with st.expander("Notatka do ćwiczenia" + (" (jest)" if wczytaj_notatke(c["nazwa"]) else "")):
         st.text_area("Notatka do ćwiczenia", key=f"sesja_nota_{nr}", height=80, label_visibility="collapsed",
                      placeholder="np. siedzisko 4, uchwyt wąski, hantle z lewej strony")
-        st.button("Zapisz notatkę", use_container_width=True, key=f"sesja_nota_zapisz_{nr}", on_click=_zapisz_notatke, args=(nr,))
-        st.caption("Notatka jest przypięta do ćwiczenia i pokaże się przy nim w każdym kolejnym treningu.")
+        st.button("Zapisz notatkę", use_container_width=True, key=f"sesja_nota_zapisz_{nr}", on_click=_zapisz_notatke, args=(nr,),
+                  help="Notatka jest przypięta do ćwiczenia i pokaże się przy nim w każdym kolejnym treningu.")
 
 
 def _panel_dodawania(stan: dict) -> None:
@@ -1744,12 +1870,16 @@ def _panel_dodawania(stan: dict) -> None:
     with st.expander("Dodaj ćwiczenie albo zmień przerwy", expanded=pusty):
         st.selectbox("Ćwiczenie z bazy", baza.lista_cwiczen(), index=None, placeholder="Wybierz lub zacznij pisać...", key="sesja_dodaj_wybor")
         st.text_input("...albo wpisz własne ćwiczenie", placeholder="np. Trójskok, Plank, Podciąganie", key="sesja_dodaj_nowe")
+        st.selectbox("Partia (tylko dla nowego, własnego ćwiczenia)", lista_partii(), index=len(lista_partii()) - 1, key="sesja_dodaj_partia",
+                     help="Do której partii mięśniowej zaliczyć nowe ćwiczenie. Dzięki temu liczy się w „Serie na partię” w Postępach. "
+                          "Dla ćwiczenia wybranego z bazy ta wartość jest pomijana.")
         st.selectbox("Jednostka (w czym liczysz)", list(JEDNOSTKI_WYBOR), key="sesja_dodaj_jednostka",
                      help="Automatycznie: jak ostatnio zapisywałeś to ćwiczenie, a gdy robisz je pierwszy raz: powtórzenia.")
         _pola_celu("sesja_dodaj")
         st.button("Dodaj do treningu", use_container_width=True, on_click=_dodaj_cwiczenie, key="sesja_dodaj_btn")
         if "sesja_przerwa" not in st.session_state:
             st.session_state["sesja_przerwa"] = stan.get("przerwa") or "Auto"
+        rzad_w_jednej_linii("sesja_przerwa")
         st.segmented_control("Długość przerwy", list(OPCJE_PRZERWY), key="sesja_przerwa", on_change=_ustaw_przerwe,
                              help="Auto: 2 min po ćwiczeniach głównych, 1 min po dodatkach. Dotyczy tego treningu.")
 
@@ -1771,8 +1901,6 @@ def _widok_konca(stan: dict) -> None:
     k2.button("Zapisz trening", type="primary", use_container_width=True, disabled=postep(stan)[0] == 0,
               on_click=_zakoncz_i_zapisz, key="sesja_zapisz_trening")
     with st.expander("Zapisz ten trening jako preset"):
-        st.caption("Z ćwiczeń, liczby serii i zakresu powtórzeń tego treningu powstanie nowy preset, "
-                   "który znajdziesz na liście przy starcie treningu. Sam trening zapisujesz osobnym przyciskiem.")
         if "sesja_preset_nazwa" not in st.session_state:
             st.session_state["sesja_preset_nazwa"] = (f"{stan['nazwa']} (moja wersja)" if stan.get("typ") else "Mój trening")
         if "sesja_preset_blad" in st.session_state:
@@ -1780,7 +1908,9 @@ def _widok_konca(stan: dict) -> None:
         if "sesja_preset_info" in st.session_state:
             st.success(st.session_state.pop("sesja_preset_info"))
         st.text_input("Nazwa presetu", key="sesja_preset_nazwa")
-        st.button("Zapisz preset", use_container_width=True, on_click=_zapisz_preset_ze_stanu, key="sesja_preset_btn")
+        st.button("Zapisz preset", use_container_width=True, on_click=_zapisz_preset_ze_stanu, key="sesja_preset_btn",
+                  help="Z ćwiczeń, liczby serii i zakresu powtórzeń tego treningu powstanie nowy preset na liście przy starcie "
+                       "treningu. Sam trening zapisujesz osobnym przyciskiem.")
     with st.expander("Porzuć trening bez zapisu"):
         st.caption("Wszystkie serie z tego treningu przepadną.")
         st.button("Tak, porzuć trening", on_click=_porzuc, key="sesja_porzuc")
@@ -1838,8 +1968,8 @@ def widok_startu(typ_planu: str | None = None) -> None:
     if typ_planu is None:
         dzis = plan_na_dzien()
         typ_planu = dzis["Typ"] if dzis["Aktywny"] else ""
-    st.subheader("Rozpocznij trening")
-    st.caption("Prowadzimy Cię seria po serii: wpisujesz wynik, odliczamy przerwę, a na końcu wszystko zapisuje się samo.")
+    st.subheader("Rozpocznij trening", help="Prowadzimy Cię seria po serii: wpisujesz wynik, odliczamy przerwę, "
+                                            "a na końcu wszystko zapisuje się samo.")
 
     wczytaj_presety_startowe()
     lista = lista_presetow()
@@ -1852,34 +1982,40 @@ def widok_startu(typ_planu: str | None = None) -> None:
                                   "Domyślnie ten z dzisiejszego planu albo ostatnio robiony.")
         wiersz = lista[lista["Nazwa"] == nazwa].iloc[0]
     zapamietana = wczytaj_ustawienie("przerwa", "Auto")
+    rzad_w_jednej_linii("start_przerwa")
     st.segmented_control("Przerwy między seriami", list(OPCJE_PRZERWY), default=zapamietana if zapamietana in OPCJE_PRZERWY else "Auto",
                          key="start_przerwa",
                          help="Zapamiętuje się na kolejne treningi. W trakcie treningu możesz je zmienić, a jednym przyciskiem wyłączyć.")
+    if powiadomienia.dostepne():
+        st.toggle("Powiadomienie o końcu przerwy", value=powiadomienia_przerwy_wlaczone(), key="start_push_przerwa",
+                  on_change=_zapisz_push_przerwy,
+                  help="Gdy przerwa się skończy, telefon dostanie powiadomienie (aplikacja ntfy), także przy zablokowanym ekranie. "
+                       "Pomiń, +30 s i wyłączenie przerw zmieniają je na bieżąco.")
 
     if wiersz is not None:
         preset_id = int(wiersz["id"])
         ostatni = ostatni_trening_rodzaju(nazwa, _tekst(wiersz["Typ"]))
         # 1) ten sam trening co ostatnio
         if ostatni:
-            data = datetime.fromisoformat(ostatni["data"]).strftime("%d.%m.%Y")
-            st.markdown(f"**Jak ostatnio ({data})**")
-            st.caption(", ".join(c["nazwa"] for c in ostatni["cwiczenia"]))
             st.button(f"Rozpocznij: {nazwa} (jak ostatnio)", type="primary", use_container_width=True, key="start_ostatni_btn",
                       on_click=rozpocznij_z_ostatniego, args=(nazwa, _tekst(wiersz["Typ"])))
         # 2) preset w wersji z rozpiski
-        with st.expander("Podgląd presetu"):
-            st.markdown(
-                widok_presetu_html(wiersz["Nazwa"], wiersz["Kategoria"], wiersz["Typ"], wiersz["Cel"] or "",
-                                   wczytaj_cwiczenia_presetu(preset_id)),
-                unsafe_allow_html=True,
-            )
         st.button(f"Rozpocznij: {nazwa}" + (" (wg rozpiski)" if ostatni else ""), type="secondary" if ostatni else "primary",
                   use_container_width=True, key="start_preset_btn", on_click=rozpocznij_z_presetu, args=(preset_id,))
+        # 3) lista ćwiczeń schowana w jednym panelu (nic nie zajmuje miejsca, dopóki jej nie otworzysz)
+        podglad = widok_presetu_html(wiersz["Nazwa"], wiersz["Kategoria"], wiersz["Typ"], wiersz["Cel"] or "",
+                                     wczytaj_cwiczenia_presetu(preset_id))
+        with st.expander("Zobacz ćwiczenia"):
+            if ostatni:
+                data = datetime.fromisoformat(ostatni["data"]).strftime("%d.%m")
+                zakladka_ostatnio, zakladka_rozpiska = st.tabs([f"Jak ostatnio ({data})", "Wg rozpiski"])
+                with zakladka_ostatnio:
+                    st.markdown("\n".join(f"- {c['nazwa']}" for c in ostatni["cwiczenia"]))
+                with zakladka_rozpiska:
+                    st.markdown(podglad, unsafe_allow_html=True)
+            else:
+                st.markdown(podglad, unsafe_allow_html=True)
 
-    # 3) pusty trening
-    st.markdown("**Od zera**")
-    st.button("Zacznij pusty trening (bez presetu)", type="secondary" if wiersz is not None else "primary",
-              use_container_width=True, key="start_pusty_btn", on_click=rozpocznij_pusty)
 
 
 JEDNOSTKI_KODY = ["powt.", "powt./nogę", "powt./stronę", "s", "min", "m"]
@@ -1924,6 +2060,50 @@ def _zamknij_okno() -> None:
     st.session_state["hist_zamknij"] = True
 
 
+def liczba_wpisow_samopoczucia() -> int:
+    with closing(_polacz()) as db:
+        try:
+            return db.execute("SELECT COUNT(*) FROM samopoczucie").fetchone()[0]
+        except sqlite3.OperationalError:
+            return 0
+
+
+def usun_wpisy_samopoczucia() -> int:
+    """Kasuje wszystkie zapisane wpisy o samopoczuciu (po kopii bazy). Zwraca liczbę usuniętych."""
+    ile = liczba_wpisow_samopoczucia()
+    if not ile:
+        return 0
+    kopia_bazy("przed_usunieciem")
+    with closing(_polacz()) as db:
+        db.execute("DELETE FROM samopoczucie")
+        db.commit()
+    return ile
+
+
+def _usun_samopoczucie() -> None:
+    ile = usun_wpisy_samopoczucia()
+    st.session_state["hist_info"] = (f"Usunięto wpisy o samopoczuciu ({ile}). Kopia bazy sprzed usunięcia jest w folderze kopie."
+                                     if ile else "Nie było wpisów do usunięcia.")
+    st.session_state["hist_zamknij"] = True
+
+
+@st.dialog("Usunąć wszystkie wpisy o samopoczuciu?")
+def okno_usuniecia_samopoczucia(ile: int) -> None:
+    if st.session_state.pop("hist_zamknij", False):
+        st.rerun()
+    st.warning(f"Zniknie {ile} zapisanych wpisów. Pole „Jak się dziś masz?” na stronie Start zostaje. "
+               "Przed usunięciem robię kopię bazy w folderze kopie.")
+    k1, k2 = st.columns(2)
+    k1.button("Tak, usuń", key="hist_sam_tak", on_click=_usun_samopoczucie, use_container_width=True)
+    k2.button("Anuluj", key="hist_sam_nie", on_click=_zamknij_okno, use_container_width=True)
+
+
+def _przemianuj() -> None:
+    ile = przemianuj_stare_treningi()
+    st.session_state["hist_info"] = (f"Zmieniono nazwy {ile} treningów. Kopia bazy sprzed zmiany jest w folderze kopie."
+                                     if ile else "Nie było nic do zmiany.")
+
+
 def _kopia_reczna() -> None:
     st.session_state["hist_info"] = f"Zrobiono kopię: {kopia_bazy('reczna').name}"
 
@@ -1947,11 +2127,11 @@ def _okno_presetu(sesja_id: int, domyslna: str) -> None:
         st.rerun()
     if "hist_blad" in s:
         st.error(s.pop("hist_blad"))
-    st.caption("Powstanie nowy preset z ćwiczeń tego treningu (liczba serii i zakres powtórzeń z tego, co zapisałeś).")
     st.text_input("Nazwa presetu", value=domyslna, key=f"hp_nazwa_{sesja_id}")
     k1, k2 = st.columns(2)
     k1.button("Zapisz preset", type="primary", use_container_width=True, on_click=_zapisz_preset_z_sesji, args=(sesja_id,),
-              key=f"hp_zapisz_{sesja_id}")
+              key=f"hp_zapisz_{sesja_id}",
+              help="Powstanie nowy preset z ćwiczeń tego treningu (liczba serii i zakres powtórzeń z tego, co zapisałeś).")
     k2.button("Anuluj", use_container_width=True, on_click=_zamknij_okno, key=f"hp_anuluj_{sesja_id}")
 
 
@@ -1998,9 +2178,9 @@ def _okno_edycji(sesja_id: int) -> None:
             "Jednostka": st.column_config.SelectboxColumn("Jednostka", options=JEDNOSTKI_KODY),
         },
     )
-    st.caption("Zmiana ćwiczeń usuwa szczegóły RPE tego treningu. Przed zapisem robi się kopia bazy.")
+    st.caption("Zmiana ćwiczeń usuwa szczegóły RPE tego treningu.")
     st.button("Zapisz zmiany", type="primary", use_container_width=True, on_click=_zapisz_edycje, args=(sesja_id,),
-              key=f"{k}_zapisz")
+              key=f"{k}_zapisz", help="Przed zapisem aplikacja robi kopię bazy w folderze kopie.")
 
 
 @st.dialog("Usunąć ten trening?")
@@ -2018,32 +2198,140 @@ CSS_HISTORIA = (
     ".st-key-hist_lista [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;gap:8px !important;}"
     ".st-key-hist_lista [data-testid='stColumn'],.st-key-hist_lista [data-testid='column']"
     "{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}"
-    "[class*='st-key-hist_u_'] button,.st-key-hist_usun_tak button{color:#C0392B;border-color:#E2B4AE;}"
+    "[class*='st-key-hist_u_'] button,.st-key-hist_usun_tak button,.st-key-hist_sam_usun button,.st-key-hist_sam_tak button"
+    "{color:var(--e-kasuj);border-color:var(--e-kasuj_ramka);}"
     "</style>"
 )
 
 
-def widok_historii(limit: int = 30) -> None:
-    """Lista ostatnich treningów: jedna zwinięta pozycja na trening (data, rodzaj, czas), po rozwinięciu ćwiczenia,
-    edycja i usuwanie. Na dole eksport i kopie zapasowe."""
+DNI_TYGODNIA = ["poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota", "niedziela"]
+MIESIACE = ["styczeń", "luty", "marzec", "kwiecień", "maj", "czerwiec", "lipiec", "sierpień", "wrzesień", "październik",
+            "listopad", "grudzień"]
+KOLORY_TRENINGOW = (("dół", "orange"), ("dol", "orange"), ("góra", "blue"), ("gora", "blue"), ("plyo", "violet"), ("cardio", "green"))
+KROK_LISTY_TRENINGOW = 15
+
+
+def kolor_treningu(nazwa: str | None) -> str:
+    """Kolor nazwy treningu w liście (po początku nazwy: Dół, Góra, Plyo, Cardio; inne szare). Dzięki temu rodzaje widać bez czytania."""
+    n = (nazwa or "").strip().lower()
+    for poczatek, kolor in KOLORY_TRENINGOW:
+        if n.startswith(poczatek):
+            return kolor
+    return "gray"
+
+
+def _data_treningu(iso) -> tuple[str, "datetime | None"]:
+    try:
+        d = datetime.fromisoformat(str(iso))
+        return d.strftime("%d.%m.%Y"), d
+    except (TypeError, ValueError):
+        return str(iso), None
+
+
+def pytajnik(tekst: str) -> None:
+    """Sam znaczek „?” z podpowiedzią po dotknięciu, zamiast stale widocznego szarego opisu."""
+    st.markdown("&nbsp;", help=tekst)
+
+
+def etykieta_treningu(t: dict) -> str:
+    """Opis do nagłówka rozwijanej pozycji (Markdown): dzień tygodnia i data pogrubione, nazwa w kolorze rodzaju, czas."""
+    napis, d = _data_treningu(t["Data"])
+    dzien = f"**{DNI_TYGODNIA[d.weekday()][:3]}. {d.strftime('%d.%m')}**" if d else f"**{napis}**"
+    nazwa = (t["Typ_treningu"] or "bez presetu").replace("[", "(").replace("]", ")")
+    czesci = [dzien, f":{kolor_treningu(t['Typ_treningu'])}[**{nazwa}**]"]
+    if t["Czas_min"]:
+        czesci.append(f"{t['Czas_min']} min")
+    return " · ".join(czesci)
+
+
+def _slowo_treningow(n: int) -> str:
+    if n == 1:
+        return "trening"
+    return "treningi" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "treningów"
+
+
+def podsumowanie_historii() -> dict:
+    """Liczba zapisanych treningów, ostatni trening i liczba treningów z ostatnich 30 dni (do kafelka w Historii)."""
+    przygotuj_tabele()
+    prog = (datetime.now() - timedelta(days=29)).date().isoformat()
+    with closing(_polacz()) as db:
+        ile = db.execute("SELECT COUNT(*) FROM sesje").fetchone()[0]
+        ostatni = db.execute("SELECT Data, Typ_treningu, Czas_min FROM sesje ORDER BY Data DESC, id DESC LIMIT 1").fetchone()
+        ile30 = db.execute("SELECT COUNT(*) FROM sesje WHERE Data >= ?", (prog,)).fetchone()[0]
+    return {"ile": ile, "ile30": ile30, "ostatni": ({"Data": ostatni[0], "Typ_treningu": ostatni[1], "Czas_min": ostatni[2]}
+                                                    if ostatni else None)}
+
+
+def kafelek_historii_html(dane: dict) -> str:
+    glowny = f"{dane['ile']} {_slowo_treningow(dane['ile'])}"
+    podpis = ""
+    if dane["ostatni"]:
+        o = dane["ostatni"]
+        napis, d = _data_treningu(o["Data"])
+        dzien = f"{DNI_TYGODNIA[d.weekday()]} {d.strftime('%d.%m')}" if d else napis
+        czas = f" · {o['Czas_min']} min" if o["Czas_min"] else ""
+        podpis = (f'<div style="font-size:0.9rem;color:{KOLOR_PRZYGASZONY};margin-top:6px;">Ostatni: {html.escape(dzien)} · '
+                  f'{html.escape(o["Typ_treningu"] or "bez presetu")}{czas}</div>'
+                  f'<div style="font-size:0.9rem;color:{KOLOR_PRZYGASZONY};">W ostatnich 30 dniach: {dane["ile30"]}</div>')
+    return '<div style="margin-bottom:14px;">' + _ramka(NIEBIESKI, (
+        f'{_naglowek_karty("Zapisane treningi", NIEBIESKI)}'
+        f'<div style="font-size:1.6rem;font-weight:700;color:{KOLOR_TEKSTU};margin-top:6px;">{glowny}</div>{podpis}')) + '</div>'
+
+
+def _otworz_liste_treningow() -> None:
+    st.session_state["hist_lista_otwarta"] = True
+    st.session_state["hist_limit"] = KROK_LISTY_TRENINGOW
+
+
+def _zamknij_liste_treningow() -> None:
+    st.session_state["hist_lista_otwarta"] = False
+
+
+def _pokaz_wiecej_treningow() -> None:
+    st.session_state["hist_limit"] = st.session_state.get("hist_limit", KROK_LISTY_TRENINGOW) + KROK_LISTY_TRENINGOW
+
+
+def _pasuje_do_szukania(t: dict, fraza: str, dzien) -> bool:
+    napis, _ = _data_treningu(t["Data"])
+    if dzien is not None and str(t["Data"])[:10] != dzien.isoformat():
+        return False
+    if not fraza:
+        return True
+    tekst = " ".join([napis, t["Typ_treningu"] or "", t["Komentarz"] or "", *[c["nazwa"] for c in t["cwiczenia"]]]).lower()
+    return all(slowo in tekst for slowo in fraza.lower().split())
+
+
+def _widok_listy_treningow() -> None:
+    """Osobny ekran: wszystkie zapisane treningi ze szukaniem (nazwa, ćwiczenie, data) i wyborem dnia, od najnowszych."""
     s = st.session_state
+    st.button("← Wróć do Historii", on_click=_zamknij_liste_treningow, key="hist_wroc")
     if "hist_info" in s:
         st.success(s.pop("hist_info"))
-    lista = historia_treningow(limit)
-    if not lista:
+    st.text_input("Szukaj", placeholder="Nazwa treningu, ćwiczenie albo data (np. 15.10)", key="hist_szukaj",
+                  label_visibility="collapsed")
+    st.date_input("Albo wybierz dzień", value=None, format="DD.MM.YYYY", key="hist_dzien")
+    wszystkie = historia_treningow(5000)
+    if not wszystkie:
         st.info("Brak zapisanych treningów. Zacznij pierwszy na stronie Start.")
-    st.markdown(CSS_HISTORIA, unsafe_allow_html=True)
+        return
+    fraza = (s.get("hist_szukaj") or "").strip()
+    dzien = s.get("hist_dzien")
+    wyniki = [t for t in wszystkie if _pasuje_do_szukania(t, fraza, dzien)]
+    if fraza or dzien:
+        st.caption(f"Znaleziono: {len(wyniki)} z {len(wszystkie)}")
+        if not wyniki:
+            st.info("Nic nie pasuje. Spróbuj krótszej frazy albo wyczyść wybór dnia.")
+    limit = s.get("hist_limit", KROK_LISTY_TRENINGOW)
     with st.container(key="hist_lista"):
-        for t in lista:
-            try:
-                data = datetime.fromisoformat(t["Data"]).strftime("%d.%m.%Y")
-            except (TypeError, ValueError):
-                data = str(t["Data"])
-            czesci = [data, t["Typ_treningu"] or "bez presetu"]
-            if t["Czas_min"]:
-                czesci.append(f"{t['Czas_min']} min")
+        miesiac = None
+        for t in wyniki[:limit]:
+            napis, d = _data_treningu(t["Data"])
+            if d and (d.year, d.month) != miesiac:
+                miesiac = (d.year, d.month)
+                st.markdown(f"##### {MIESIACE[d.month - 1].capitalize()} {d.year}")
+            czesci = [napis, t["Typ_treningu"] or "bez presetu"] + ([f"{t['Czas_min']} min"] if t["Czas_min"] else [])
             opis = " · ".join(czesci)
-            with st.expander(opis):
+            with st.expander(etykieta_treningu(t)):
                 if t["Waga"]:
                     st.caption(f"Waga: {format_kg(t['Waga'])} kg")
                 if t["Komentarz"]:
@@ -2053,23 +2341,59 @@ def widok_historii(limit: int = 30) -> None:
                 for c in t["cwiczenia"]:
                     st.markdown(f"**{c['nazwa']}**: {c['opis']}")
                 if st.button("Zapisz jako preset", key=f"hist_p_{t['id']}", use_container_width=True) and t["cwiczenia"]:
-                    _okno_presetu(t["id"], f"{t['Typ_treningu']} (moja wersja)" if t["Typ_treningu"] else f"Mój trening z {data}")
+                    _okno_presetu(t["id"], f"{t['Typ_treningu']} (moja wersja)" if t["Typ_treningu"] else f"Mój trening z {napis}")
                 k1, k2 = st.columns(2)
                 if k1.button("Edytuj", key=f"hist_e_{t['id']}", use_container_width=True,
                              on_click=_wyczysc_edycje, args=(t["id"],)):
                     _okno_edycji(t["id"])
                 if k2.button("Usuń trening", key=f"hist_u_{t['id']}", use_container_width=True):
                     _okno_usuniecia(t["id"], opis)
-    if len(lista) >= limit:
-        st.caption(f"Pokazano {limit} ostatnich treningów. Wszystkie dane są w eksporcie i w tabeli poniżej.")
-    with st.expander("Eksport i kopie zapasowe"):
+    if len(wyniki) > limit:
+        st.button(f"Pokaż starsze (jeszcze {len(wyniki) - limit})", use_container_width=True,
+                  on_click=_pokaz_wiecej_treningow, key="hist_wiecej")
+
+
+def widok_historii() -> None:
+    """Strona Historia: jeden kafelek „Zapisane treningi” otwierający osobny ekran z listą, a pod nim jedno zwijane menu
+    z narzędziami (ujednolicenie nazw, eksport, kopie zapasowe, pełna tabela)."""
+    s = st.session_state
+    st.markdown(CSS_HISTORIA, unsafe_allow_html=True)
+    if s.get("hist_lista_otwarta"):
+        _widok_listy_treningow()
+        return
+    if "hist_info" in s:
+        st.success(s.pop("hist_info"))
+    dane = podsumowanie_historii()
+    if not dane["ile"]:
+        st.info("Brak zapisanych treningów. Zacznij pierwszy na stronie Start.")
+    else:
+        st.markdown(kafelek_historii_html(dane), unsafe_allow_html=True)
+        st.button("Otwórz zapisane treningi", type="primary", use_container_width=True, on_click=_otworz_liste_treningow,
+                  key="hist_otworz", help="Lista od najnowszych, ze szukaniem po nazwie, ćwiczeniu i dacie.")
+    do_zmiany = plan_przemianowania()
+    with st.expander("Narzędzia: nazwy, eksport, kopie zapasowe" + (f" ({len(do_zmiany)} do ujednolicenia)" if do_zmiany else "")):
+        if do_zmiany:
+            st.markdown("**Ujednolicenie nazw starych treningów**",
+                        help="Starsze treningi mają zapisany dawny rodzaj (np. „Góra Siła”), a nowe nazwę presetu. Poniżej zmiany, "
+                             "które da się zrobić jednoznacznie. Przed zmianą aplikacja robi kopię bazy. Treningów, których nie da się "
+                             "przypisać jednoznacznie (np. samo „Cardio” przy trzech presetach), nie ruszamy.")
+            for w in do_zmiany:
+                dzien, _ = _data_treningu(w["data"])
+                st.markdown(f"{dzien}: **{w['stare'] or 'bez nazwy'}** → **{w['nowe']}**")
+            st.button("Zmień nazwy (z kopią bazy)", use_container_width=True, on_click=_przemianuj, key="hist_przemianuj")
+            st.divider()
+        st.markdown("**Kopie zapasowe i eksport**",
+                    help="Aplikacja robi kopię raz dziennie oraz przed każdą edycją i usunięciem treningu.")
         kopie = lista_kopii()
         ostatnia = datetime.fromtimestamp(kopie[0].stat().st_mtime).strftime("%d.%m.%Y %H:%M") if kopie else "brak"
-        st.caption(f"Kopie w folderze kopie: {len(kopie)}, ostatnia: {ostatnia}. Aplikacja robi kopię raz dziennie "
-                   "oraz przed każdą edycją i usunięciem.")
+        st.caption(f"Kopie: {len(kopie)}, ostatnia: {ostatnia}")
         dzis = datetime.now().strftime("%Y%m%d")
         st.download_button("Pobierz treningi (CSV, do Excela)", data=eksport_csv(), file_name=f"treningi_{dzis}.csv",
                            mime="text/csv", use_container_width=True, key="hist_csv")
         st.download_button("Pobierz całą bazę (plik .db)", data=plik_bazy(), file_name=f"treningi_{dzis}.db",
                            mime="application/octet-stream", use_container_width=True, key="hist_db")
         st.button("Zrób kopię teraz", use_container_width=True, on_click=_kopia_reczna, key="hist_kopia")
+        if dane["ile"]:
+            st.divider()
+            if st.toggle("Pokaż pełną tabelę (surowe dane)", key="hist_tabela"):
+                st.dataframe(baza.wczytaj_historie_sesji(), use_container_width=True, hide_index=True)

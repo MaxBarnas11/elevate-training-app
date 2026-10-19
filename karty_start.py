@@ -1,6 +1,7 @@
 """Nowe kafelki na stronie Start: kroki, kalorie, stres, fazy snu i tydzień treningowy."""
 from __future__ import annotations
 
+from motywy import kolor_typu
 from karty import (
     KOLOR_OBRAMOWANIA, KOLOR_TLA_PIERSCIENIA, KOLOR_TEKSTU, KOLOR_PRZYGASZONY, KOLOR_KARTY,
     ZIELONY, ZOLTY, POMARANCZOWY, CZERWONY, NIEBIESKI,
@@ -245,17 +246,18 @@ def karta_tydzien(podsumowanie: dict) -> str:
 
     kolumny = []
     for d in podsumowanie["dni"]:
+        kolor_dnia = kolor_typu(d["typ"]) or KOLOR_TEKSTU      # rodzaj treningu ma swój kolor
         if d["zrobiony"]:
             kropka = (
-                f'<div style="width:34px;height:34px;border-radius:50%;background:{KOLOR_TEKSTU};display:flex;'
+                f'<div style="width:34px;height:34px;border-radius:50%;background:{kolor_dnia};display:flex;'
                 f'align-items:center;justify-content:center;">'
                 f'<svg width="16" height="16" viewBox="0 0 16 16"><polyline points="3,8.5 6.5,12 13,4.5" fill="none" '
-                f'stroke="{KOLOR_KARTY}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>'
+                f'style="stroke:var(--e-przycisk_tekst)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>'
             )
         elif d["planowany"] and d["przeszlosc"]:      # zaległy: pomarańczowy pierścień
             kropka = f'<div style="width:30px;height:30px;border-radius:50%;border:2px solid {POMARANCZOWY};"></div>'
         elif d["planowany"]:                          # dziś lub w przyszłości: ciemny pierścień
-            kropka = f'<div style="width:30px;height:30px;border-radius:50%;border:2px solid {KOLOR_TEKSTU};"></div>'
+            kropka = f'<div style="width:30px;height:30px;border-radius:50%;border:2px solid {kolor_dnia};"></div>'
         else:                                         # dzień wolny: mała kropka
             kropka = f'<div style="width:8px;height:8px;border-radius:50%;background:{KOLOR_TLA_PIERSCIENIA};"></div>'
         podpis = (d["typ"] or "trening") if (d["planowany"] or d["zrobiony"]) else "wolne"

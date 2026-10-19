@@ -14,9 +14,10 @@ from karty import (
     NIEBIESKI, POMARANCZOWY, ZIELONY,
     _naglowek_karty, _tlo_karty, siatka_kart,
 )
+from motywy import v as _kolor_motywu
 from wykresy import SEN_PASMO, pasmo_osobiste
 
-KOLOR_LINII = "#2B2A27"
+KOLOR_LINII = _kolor_motywu("linia")
 ZAKRESY = {"7 dni": 7, "30 dni": 30, "90 dni": 90}
 
 
@@ -59,13 +60,12 @@ def karta_trendu(tytul: str, srednia: float | None, poprzednia: float | None, je
                 opis = f"{strzalka} {wartosc} {jednostka} vs poprzednie 7 dni".replace("  ", " ")
     return (
         f'<div style="{_tlo_karty(kolor)}border:1px solid {KOLOR_OBRAMOWANIA};border-radius:16px;'
-        f'padding:16px 18px;height:170px;box-sizing:border-box;display:flex;flex-direction:column;">'
+        f'padding:16px 18px;min-height:140px;box-sizing:border-box;display:flex;flex-direction:column;">'
         f'{_naglowek_karty(html.escape(tytul), kolor)}'
         f'<div style="text-align:center;margin-top:10px;">'
         f'<span style="font-size:2.2rem;font-weight:700;color:{KOLOR_TEKSTU};">{napis}</span>'
         f'<span style="font-size:1rem;color:{KOLOR_PRZYGASZONY};margin-left:6px;">{jednostka}</span></div>'
         f'<div style="text-align:center;font-size:0.8rem;font-weight:600;color:{kolor};margin-top:2px;">{opis}</div>'
-        f'<div style="margin-top:auto;text-align:center;font-size:0.7rem;color:{KOLOR_PRZYGASZONY};">średnia z ostatnich 7 dni</div>'
         f'</div>'
     )
 
@@ -129,29 +129,29 @@ def wykres_liniowy_svg(seria: pd.Series, jednostka: str = "", pasmo: tuple[float
               f'font-family="Segoe UI, Arial, sans-serif">']
     # siatka i opisy osi Y
     for t in ticki:
-        czesci.append(f'<line x1="{l}" x2="{szer - p}" y1="{y(t):.1f}" y2="{y(t):.1f}" stroke="{KOLOR_TLA_PIERSCIENIA}" stroke-width="1"/>')
+        czesci.append(f'<line x1="{l}" x2="{szer - p}" y1="{y(t):.1f}" y2="{y(t):.1f}" style="stroke:{KOLOR_TLA_PIERSCIENIA}" stroke-width="1"/>')
         etykieta = f"{t:.0f}" if abs(t - round(t)) < 1e-6 else f"{t:.1f}"
-        czesci.append(f'<text x="{l - 8}" y="{y(t) + 4:.1f}" text-anchor="end" font-size="11" fill="{KOLOR_PRZYGASZONY}">{etykieta}</text>')
+        czesci.append(f'<text x="{l - 8}" y="{y(t) + 4:.1f}" text-anchor="end" font-size="11" style="fill:{KOLOR_PRZYGASZONY}">{etykieta}</text>')
     # pasmo
     if pasmo:
         gp, dp = max(pasmo[1], y0), min(pasmo[0], y1)
         if gp > dp:
-            czesci.append(f'<rect x="{l}" y="{y(gp):.1f}" width="{szer - l - p}" height="{y(dp) - y(gp):.1f}" fill="{ZIELONY}" fill-opacity="0.16"/>')
+            czesci.append(f'<rect x="{l}" y="{y(gp):.1f}" width="{szer - l - p}" height="{y(dp) - y(gp):.1f}" style="fill:{ZIELONY}" fill-opacity="0.16"/>')
     # opisy osi X
     krok = 1 if rozpietosc_dni <= 7 else math.ceil(rozpietosc_dni / 5)
     dzien = pierwszy
     while dzien <= ostatni:
-        czesci.append(f'<text x="{x(dzien):.1f}" y="{wys - 6}" text-anchor="middle" font-size="11" fill="{KOLOR_PRZYGASZONY}">{dzien:%d.%m}</text>')
+        czesci.append(f'<text x="{x(dzien):.1f}" y="{wys - 6}" text-anchor="middle" font-size="11" style="fill:{KOLOR_PRZYGASZONY}">{dzien:%d.%m}</text>')
         dzien += timedelta(days=krok)
     # linia główna (przy średniej ruchomej jest delikatna, a średnia mocna)
     punkty = " ".join(f"{x(dz):.1f},{y(v):.1f}" for dz, v in zip(dni, wartosci))
     gruba = srednia_ruchoma is None
-    czesci.append(f'<polyline points="{punkty}" fill="none" stroke="{KOLOR_LINII if gruba else KOLOR_PRZYGASZONY}" '
+    czesci.append(f'<polyline points="{punkty}" fill="none" style="stroke:{KOLOR_LINII if gruba else KOLOR_PRZYGASZONY}" '
                   f'stroke-width="{2.4 if gruba else 1.2}" stroke-opacity="{1 if gruba else 0.6}" stroke-linejoin="round" stroke-linecap="round"/>')
     if srednia_ruchoma is not None and len(srednia_ruchoma.dropna()) >= 2:
         sr = srednia_ruchoma.dropna()
         pts = " ".join(f"{x(ts.date()):.1f},{y(v):.1f}" for ts, v in sr.items())
-        czesci.append(f'<polyline points="{pts}" fill="none" stroke="{KOLOR_LINII}" stroke-width="2.6" '
+        czesci.append(f'<polyline points="{pts}" fill="none" style="stroke:{KOLOR_LINII}" stroke-width="2.6" '
                       f'stroke-linejoin="round" stroke-linecap="round"/>')
     # punkty z podpowiedziami
     for i, (dz, v) in enumerate(zip(dni, wartosci)):
@@ -159,7 +159,7 @@ def wykres_liniowy_svg(seria: pd.Series, jednostka: str = "", pasmo: tuple[float
         wart = f"{v:.{miejsca}f}".replace(".", ",")
         czesci.append(
             f'<circle cx="{x(dz):.1f}" cy="{y(v):.1f}" r="{5 if ost else 3.2}" '
-            f'fill="{KOLOR_LINII if ost else KOLOR_KARTY}" stroke="{KOLOR_LINII if gruba else KOLOR_PRZYGASZONY}" stroke-width="1.8">'
+            f'style="fill:{KOLOR_LINII if ost else KOLOR_KARTY};stroke:{KOLOR_LINII if gruba else KOLOR_PRZYGASZONY}" stroke-width="1.8">'
             f'<title>{dz:%d.%m.%Y}: {wart} {html.escape(jednostka)}</title></circle>'
         )
     czesci.append("</svg>")
@@ -167,14 +167,13 @@ def wykres_liniowy_svg(seria: pd.Series, jednostka: str = "", pasmo: tuple[float
 
 
 def karta_wykresu(tytul: str, podpis: str, svg: str, komunikat_pusty: str = "Za mało danych w tym zakresie.") -> str:
+    """Karta z wykresem. Parametr `podpis` nie jest już wyświetlany (opisy wykresów są pod znakiem „?” na stronie); zostaje dla zgodności."""
     tresc = svg or (f'<div style="height:150px;display:flex;align-items:center;justify-content:center;'
                     f'font-size:0.85rem;color:{KOLOR_PRZYGASZONY};">{komunikat_pusty}</div>')
     return (
         f'<div style="{_tlo_karty(NIEBIESKI)}border:1px solid {KOLOR_OBRAMOWANIA};border-radius:16px;'
         f'padding:16px 18px;box-sizing:border-box;min-width:0;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;">'
         f'{_naglowek_karty(html.escape(tytul), NIEBIESKI)}'
-        f'<span style="font-size:0.72rem;color:{KOLOR_PRZYGASZONY};text-align:right;">{podpis}</span></div>'
         f'<div style="margin-top:12px;">{tresc}</div></div>'
     )
 
@@ -191,7 +190,46 @@ def siatka_wykresow(karty: list[str]) -> str:
 # ---------------------------------------------------------------
 # Widok strony
 # ---------------------------------------------------------------
-def widok_regeneracji() -> None:
+def _widok_reczny(od: pd.Timestamp) -> None:
+    """Wykresy z ręcznego dziennika (dla osób bez zegarka): sen w godzinach, energia i waga."""
+    import dziennik
+    dz = dziennik.wczytaj()
+    wagi = baza.wczytaj_wage_do_wykresu()
+    waga = wagi["Waga"] if (not wagi.empty and "Waga" in wagi.columns) else pd.Series(dtype=float)
+    z_dziennika = dziennik.waga_do_wykresu()
+    if len(z_dziennika):
+        waga = pd.concat([waga, z_dziennika]).groupby(level=0).mean().sort_index()
+    sen = dz["Sen_godz"].dropna() if not dz.empty else pd.Series(dtype=float)
+    energia = dz["Energia"].dropna() if not dz.empty else pd.Series(dtype=float)
+    if max(len(sen), len(energia), len(waga)) < 2:
+        st.info("Wykresy pojawią się, gdy wpiszesz dane z co najmniej dwóch dni (Start, „Dziś w liczbach”).")
+        return
+    sen_now, sen_prev = srednie_tygodniowe(sen)
+    en_now, en_prev = srednie_tygodniowe(energia)
+    waga_now, waga_prev = srednie_tygodniowe(waga)
+    st.markdown(siatka_kart([
+        karta_trendu("Sen", sen_now, sen_prev, "h", True, prog=0.25, miejsca=1),
+        karta_trendu("Energia", en_now, en_prev, "/5", True, prog=0.3, miejsca=1),
+        karta_trendu("Waga", waga_now, waga_prev, "kg", None, prog=0.2, miejsca=1),
+    ]), unsafe_allow_html=True)
+    sr = waga.rolling("7D").mean()[waga.index >= od] if len(waga) else None
+    karty = [
+        karta_wykresu("Sen (godziny)", "zielone pole: 7-9 godzin", wykres_liniowy_svg(sen[sen.index >= od], "h", pasmo=(7.0, 9.0), miejsca=1),
+                      komunikat_pusty="Wpisz sen w co najmniej 2 dniach tego zakresu."),
+        karta_wykresu("Energia (1-5)", "", wykres_liniowy_svg(energia[energia.index >= od], "/5", limit_gorny=5),
+                      komunikat_pusty="Wpisz energię w co najmniej 2 dniach tego zakresu."),
+        karta_wykresu("Waga ciała", "cienka linia: pomiary, gruba: średnia z 7 dni",
+                      wykres_liniowy_svg(waga[waga.index >= od] if len(waga) else waga, "kg", srednia_ruchoma=sr, miejsca=1),
+                      komunikat_pusty="Wpisz wagę w co najmniej 2 dniach tego zakresu."),
+    ]
+    st.markdown(siatka_wykresow(karty), unsafe_allow_html=True)
+    from sesja_treningowa import pytajnik
+    pytajnik("Dane pochodzą z Twoich wpisów (Start, „Dziś w liczbach”). Kafelki: średnia z ostatnich 7 dni i różnica względem "
+             "poprzednich 7 dni. Sen: zielone pole to 7-9 godzin. Waga: cienka linia to pomiary, gruba to średnia z 7 dni. "
+             "Wagę z formularzy treningu też widać tutaj.")
+
+
+def widok_regeneracji(reczny: bool = False) -> None:
     # Wyśrodkowanie przełącznika zakresu (klasa st-key-reg_zakres pochodzi od klucza widżetu)
     st.markdown(
         "<style>"
@@ -205,6 +243,9 @@ def widok_regeneracji() -> None:
                                      label_visibility="collapsed")
     dni = ZAKRESY.get(wybor or "30 dni", 30)
     od = pd.Timestamp(date.today() - timedelta(days=dni - 1))
+    if reczny:
+        _widok_reczny(od)
+        return
 
     historia = baza.wczytaj_dane_garmin_do_wykresow()
     wagi = baza.wczytaj_wage_do_wykresu()
@@ -243,4 +284,8 @@ def widok_regeneracji() -> None:
                                wykres_liniowy_svg(waga_zakres, "kg", srednia_ruchoma=sr, miejsca=1),
                                komunikat_pusty="Wpisz wagę w co najmniej 2 dniach tego zakresu."))
     st.markdown(siatka_wykresow(karty), unsafe_allow_html=True)
-    st.caption("Pasmo RHR i HRV to Twoja średnia ± odchylenie standardowe (pojawia się od kilku dni danych).")
+    from sesja_treningowa import pytajnik
+    pytajnik("Kafelki: średnia z ostatnich 7 dni i różnica względem poprzednich 7 dni (zielony: zmiana na dobre, pomarańczowy: na gorsze). "
+             "Wynik snu: zielone pole to dobry i doskonały sen. Tętno spoczynkowe i HRV: zielone pole to Twój zwykły zakres "
+             "(średnia ± odchylenie standardowe, pojawia się od kilku dni danych); przy tętnie niżej znaczy lepiej. "
+             "Waga: cienka linia to pomiary, gruba to średnia z 7 dni.")

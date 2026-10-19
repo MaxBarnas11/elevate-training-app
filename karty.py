@@ -2,19 +2,27 @@
 from __future__ import annotations
 
 import math
+from datetime import date
 
-# Kolory spójne z motywem aplikacji
-KOLOR_KARTY = "#F4ECDC"
-KOLOR_OBRAMOWANIA = "#CFC2A6"
-KOLOR_TLA_PIERSCIENIA = "#DCD0B8"
-KOLOR_TEKSTU = "#1B1B1A"
-KOLOR_PRZYGASZONY = "#6B6355"
+from motywy import CZCIONKA_TYTULOW, poswiata, v
 
-ZIELONY = "#3F9A5A"
-ZOLTY = "#E0AC00"
-POMARANCZOWY = "#E8751A"
-CZERWONY = "#D5392F"
-NIEBIESKI = "#7A6A4F"
+# Kolory to zmienne CSS motywu (jasny/ciemny), patrz motywy.py
+KOLOR_KARTY = v("karta")
+KOLOR_OBRAMOWANIA = v("obram")
+KOLOR_TLA_PIERSCIENIA = v("tlo_pier")
+KOLOR_TEKSTU = v("tekst")
+KOLOR_PRZYGASZONY = v("przyg")
+
+ZIELONY = v("zielony")
+ZOLTY = v("zolty")
+POMARANCZOWY = v("pomaranczowy")
+CZERWONY = v("czerwony")
+NIEBIESKI = v("akcent")   # kolor neutralny (nazwa historyczna)
+
+
+def tlo_przezr(kolor: str, procent: int) -> str:
+    """Kolor z przezroczystością (zamiast doklejania cyfr szesnastkowych)."""
+    return f"color-mix(in srgb, {kolor} {procent}%, transparent)"
 
 
 def kolor_snu(wynik: float | None) -> str:
@@ -41,8 +49,8 @@ def status_snu(wynik: float | None) -> str:
 
 
 def _tlo_karty(kolor: str) -> str:
-    """Tło karty z miękką poświatą w kolorze statusu (kolor + 2E to ok. 18% krycia)."""
-    return f"background:radial-gradient(ellipse at 50% 0%, {kolor}55 0%, transparent 70%), {KOLOR_KARTY};"
+    """Tło karty z miękką poświatą w kolorze statusu (w ciemnym motywie słabszą)."""
+    return f"background:{poswiata(kolor, 33)}, {KOLOR_KARTY};"
 
 
 def _naglowek_karty(tytul: str, kolor: str) -> str:
@@ -75,11 +83,11 @@ def karta_pierscien(tytul: str, wartosc: float | None, maks: float,
         f'<div style="flex:1;display:flex;flex-direction:column;align-items:center;'
         f'justify-content:center;text-align:center;">'
         f'<svg width="104" height="104" viewBox="0 0 110 110">'
-        f'<circle cx="55" cy="55" r="{promien}" fill="none" stroke="{KOLOR_TLA_PIERSCIENIA}" stroke-width="10"/>'
-        f'<circle cx="55" cy="55" r="{promien}" fill="none" stroke="{kolor}" stroke-width="10" '
+        f'<circle cx="55" cy="55" r="{promien}" fill="none" style="stroke:{KOLOR_TLA_PIERSCIENIA}" stroke-width="10"/>'
+        f'<circle cx="55" cy="55" r="{promien}" fill="none" style="stroke:{kolor}" stroke-width="10" '
         f'stroke-linecap="round" stroke-dasharray="{dlugosc:.1f} {obwod:.1f}" transform="rotate(-90 55 55)"/>'
         f'<text x="55" y="{55 + rozmiar * 0.35:.0f}" text-anchor="middle" font-size="{rozmiar}" '
-        f'font-weight="700" fill="{KOLOR_TEKSTU}">{napis}</text>'
+        f'font-weight="700" style="fill:{KOLOR_TEKSTU}">{napis}</text>'
         f'</svg>'
         f'<div style="font-size:1.25rem;font-weight:700;line-height:1.2;color:{kolor};margin-top:6px;">{status}</div>'
         f'<div style="font-size:0.8rem;color:{KOLOR_PRZYGASZONY};min-height:1em;">{podpis}</div>'
@@ -91,9 +99,9 @@ def karta_wartosc(tytul: str, wartosc: float | None, jednostka: str,
                   kolor: str = NIEBIESKI, podpis: str = "",
                   seria: list[float] | None = None,
                   pasmo: tuple[float, float] | None = None,
-                  plakietka: str = "") -> str:
+                  plakietka: str = "", miejsca: int = 0) -> str:
     """Karta z wyśrodkowaną liczbą, statusem i małym wykresem ostatnich dni."""
-    napis = "-" if wartosc is None else f"{wartosc:.0f}"
+    napis = "-" if wartosc is None else f"{wartosc:.{miejsca}f}".replace(".", ",")
     wykres = sparkline_svg(seria, pasmo, kolor) if seria else ""
     return (
         f'<div style="{_tlo_karty(kolor)}border:1px solid {KOLOR_OBRAMOWANIA};border-radius:16px;'
@@ -155,12 +163,12 @@ def sparkline_svg(wartosci: list[float], pasmo: tuple[float, float] | None = Non
     if pasmo:
         g, d = y(pasmo[1]), y(pasmo[0])
         pasmo_svg = (f'<rect x="0" y="{g:.1f}" width="{szer}" height="{d - g:.1f}" '
-                     f'fill="{ZIELONY}" fill-opacity="0.18"/>')
+                     f'style="fill:{ZIELONY}" fill-opacity="0.18"/>')
     return (
         f'<svg viewBox="0 0 {szer} {wys}" width="100%" height="{wys}" '
         f'preserveAspectRatio="none" style="display:block;">'
         f'{pasmo_svg}'
-        f'<polyline points="{punkty}" fill="none" stroke="{kolor}" stroke-width="2" '
+        f'<polyline points="{punkty}" fill="none" style="stroke:{kolor}" stroke-width="2" '
         f'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>'
         f'</svg>'
     )
@@ -197,7 +205,7 @@ def plakietka_zmiany(wartosc: float | None, srednia: float | None,
         tekst = f"{strzalka} {roznica:+.0f} {jednostka} vs śr. 7 dni".replace("  ", " ")
     return (
         f'<div style="margin-top:6px;text-align:center;">'
-        f'<span style="display:inline-block;background:{kolor}26;color:{kolor};border-radius:999px;'
+        f'<span style="display:inline-block;background:{tlo_przezr(kolor, 15)};color:{kolor};border-radius:999px;'
         f'padding:2px 10px;font-size:0.75rem;font-weight:600;">{tekst}</span></div>'
     )
 
@@ -267,13 +275,26 @@ def siatka_kart(karty: list[str]) -> str:
 
 
 def naglowek_strony(tytul: str, podtytul: str = "", kolor: str = NIEBIESKI) -> str:
-    """Wyśrodkowany nagłówek strony z miękką poświatą w tle (jak na kartach na pulpicie)."""
+    """Nagłówek strony w stylu plansz technicznych: drobna linia opisu, duży napis z szerokiej czcionki.
+    Napis ma trójkolorową poświatę (pomarańcz, fiolet, róż); w jasnym motywie jaśniejszą.
+    Parametr `kolor` zostaje dla zgodności ze starym kodem."""
+    dzis = date.today()
+    najdluzsze_slowo = max((len(s) for s in str(tytul).split()), default=5)
+    rozmiar = f"min(3.2rem, calc((100vw - 3rem) / {max(najdluzsze_slowo, 5) * 0.92:.2f}))"   # najdłuższe słowo mieści się w jednej linii
+    napis_daty = f"{dzis:%d.%m.%Y}"
     podpis = (
-        f'<div style="font-size:0.95rem;color:{KOLOR_PRZYGASZONY};margin-top:6px;">{podtytul}</div>'
+        f'<div style="font-size:0.9rem;color:{KOLOR_PRZYGASZONY};margin-top:12px;letter-spacing:0.01em;">{podtytul}</div>'
         if podtytul else ""
     )
+    meta = (f"font-size:0.68rem;letter-spacing:0.2em;text-transform:uppercase;color:{KOLOR_PRZYGASZONY};"
+            "display:flex;justify-content:space-between;align-items:center;")
     return (
-        f'<div style="text-align:center;padding:44px 16px 22px 16px;margin:0 0 18px 0;border-radius:0 0 16px 16px;'        f'background:radial-gradient(ellipse at 50% 0%, {kolor}33 0%, transparent 70%);">'
-        f'<div style="font-size:2.3rem;font-weight:700;line-height:1.2;color:{KOLOR_TEKSTU};">{tytul}</div>'
+        f'<div style="padding:30px 4px 18px 4px;margin:0 0 14px 0;">'
+        f'<div style="{meta}"><span>● ELEVATE</span><span>{napis_daty} ✦</span></div>'
+        f'<div style="height:1px;background:{v("obram2")};margin:10px 0 14px 0;"></div>'
+        f'<div style="font-family:{CZCIONKA_TYTULOW};font-weight:800;font-stretch:125%;text-transform:uppercase;'
+        f'font-size:{rozmiar};line-height:1.02;letter-spacing:0.01em;color:{KOLOR_TEKSTU};'
+        f'overflow-wrap:anywhere;'
+        f'text-shadow:-9px 0 9px {v("tytul_glow2")},9px 0 9px {v("tytul_glow3")},0 8px 14px {v("tytul_glow1")};">{tytul}</div>'
         f'{podpis}</div>'
     )

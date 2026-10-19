@@ -17,15 +17,16 @@ import streamlit as st
 
 import baza
 from karty import (
-    KOLOR_KARTY, KOLOR_OBRAMOWANIA, KOLOR_PRZYGASZONY, KOLOR_TEKSTU,
+    KOLOR_KARTY, KOLOR_OBRAMOWANIA, KOLOR_PRZYGASZONY, KOLOR_TEKSTU, KOLOR_TLA_PIERSCIENIA,
     NIEBIESKI, POMARANCZOWY, ZIELONY, _naglowek_karty, _tlo_karty, siatka_kart,
 )
+from motywy import v as _kolor_motywu
 from regeneracja import karta_wykresu, siatka_wykresow, wykres_liniowy_svg
-from sesja_treningowa import JEDNOSTKI_POWTORZEN, format_kg, jednostka_powtorzen, opis_serii
+from sesja_treningowa import JEDNOSTKI_POWTORZEN, format_kg, jednostka_powtorzen, lista_partii, opis_serii, pytajnik
 
 ZAKRESY = {"30 dni": 30, "90 dni": 90, "Rok": 365, "Wszystko": None}
-KOLOR_SLUPKA = "#7A6A4F"
-KOLOR_SLUPKA_BIEZACY = "#2B2A27"
+KOLOR_SLUPKA = _kolor_motywu("slupek")
+KOLOR_SLUPKA_BIEZACY = _kolor_motywu("slupek_biezacy")
 
 
 # ---------------------------------------------------------------
@@ -134,6 +135,22 @@ def partie_cwiczen() -> dict[str, str]:
             return {}
 
 
+def przypisz_partie(nazwa: str, partia: str) -> None:
+    """Zmienia partię ćwiczenia w bazie (dodaje je, jeśli go tam jeszcze nie ma)."""
+    with closing(sqlite3.connect(baza.SCIEZKA_BAZY)) as db:
+        db.execute("INSERT OR IGNORE INTO cwiczenia (Nazwa, Partia) VALUES (?, ?)", (nazwa, partia))
+        db.execute("UPDATE cwiczenia SET Partia = ? WHERE Nazwa = ?", (partia, nazwa))
+        db.commit()
+
+
+def _przypisz_z_formularza() -> None:
+    s = st.session_state
+    if s.get("post_partia_cwiczenie") and s.get("post_partia_wybor"):
+        przypisz_partie(s["post_partia_cwiczenie"], s["post_partia_wybor"])
+        s["post_partia_info"] = f"Zapisano: {s['post_partia_cwiczenie']} → {s['post_partia_wybor']}."
+        s["post_partia_cwiczenie"] = None
+
+
 def serie_na_partie(wpisy: pd.DataFrame, partie: dict[str, str], dzis: date, ile_tygodni: int = 5) -> pd.DataFrame:
     """Serie na partię mięśniową w kolejnych tygodniach (kolumny: poniedziałki, najstarszy pierwszy, ostatni to bieżący tydzień).
     Liczą się tylko ćwiczenia w powtórzeniach; rozgrzewki nie wchodzą, bo nie trafiają do wpisów ćwiczeń."""
@@ -211,7 +228,7 @@ def ogranicz_wysokosc(svg: str, px: int = 230) -> str:
 def karta_liczby(tytul: str, wartosc: str, jednostka: str, opis: str, kolor: str, podpis: str = "") -> str:
     return (
         f'<div style="{_tlo_karty(kolor)}border:1px solid {KOLOR_OBRAMOWANIA};border-radius:16px;'
-        f'padding:16px 18px;height:170px;box-sizing:border-box;display:flex;flex-direction:column;">'
+        f'padding:16px 18px;min-height:{170 if podpis else 140}px;box-sizing:border-box;display:flex;flex-direction:column;">'
         f'{_naglowek_karty(html.escape(tytul), kolor)}'
         f'<div style="text-align:center;margin-top:10px;">'
         f'<span style="font-size:2.2rem;font-weight:700;color:{KOLOR_TEKSTU};">{html.escape(wartosc)}</span>'
@@ -250,13 +267,13 @@ def slupki_svg(etykiety: list[str], wartosci: list[float], jednostka: str = "") 
         kolor = KOLOR_SLUPKA_BIEZACY if i == n - 1 else KOLOR_SLUPKA
         opis = f"{w / 1000:.1f} t".replace(".", ",") if w >= 10000 else f"{w:.0f}"
         if w > 0:
-            czesci.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{szer_slupka:.1f}" height="{h:.1f}" rx="4" fill="{kolor}">'
+            czesci.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{szer_slupka:.1f}" height="{h:.1f}" rx="4" style="fill:{kolor}">'
                           f'<title>tydzień od {et}: {w:.0f} {html.escape(jednostka)}</title></rect>')
-            czesci.append(f'<text x="{x + szer_slupka / 2:.1f}" y="{y - 5:.1f}" text-anchor="middle" font-size="10" fill="{KOLOR_PRZYGASZONY}">{opis}</text>')
+            czesci.append(f'<text x="{x + szer_slupka / 2:.1f}" y="{y - 5:.1f}" text-anchor="middle" font-size="10" style="fill:{KOLOR_PRZYGASZONY}">{opis}</text>')
         else:
-            czesci.append(f'<rect x="{x:.1f}" y="{wys - d - 2}" width="{szer_slupka:.1f}" height="2" rx="1" fill="{KOLOR_OBRAMOWANIA}"/>')
+            czesci.append(f'<rect x="{x:.1f}" y="{wys - d - 2}" width="{szer_slupka:.1f}" height="2" rx="1" style="fill:{KOLOR_OBRAMOWANIA}"/>')
         if n <= 8 or i % 2 == (n - 1) % 2:
-            czesci.append(f'<text x="{x + szer_slupka / 2:.1f}" y="{wys - 8}" text-anchor="middle" font-size="10" fill="{KOLOR_PRZYGASZONY}">{et}</text>')
+            czesci.append(f'<text x="{x + szer_slupka / 2:.1f}" y="{wys - 8}" text-anchor="middle" font-size="10" style="fill:{KOLOR_PRZYGASZONY}">{et}</text>')
     czesci.append("</svg>")
     return ogranicz_wysokosc("".join(czesci), 220)
 
@@ -286,39 +303,51 @@ def karta_rekordow(rek: pd.DataFrame, ile: int = 6) -> str:
     )
 
 
+KOLOR_POPRZEDNI_TYDZIEN = _kolor_motywu("poprzedni")
+
+
 def karta_partii(tabela: pd.DataFrame, znacznik: int = 10) -> str:
-    """Poziome słupki: serie w bieżącym tygodniu na każdą partię, obok średnia z poprzednich tygodni. Kreska = punkt odniesienia."""
+    """Poziome słupki serii na partię: szary to poprzedni tydzień, zielony bieżący. Kreska to punkt odniesienia. Legenda pod spodem."""
     tytul = _naglowek_karty("Serie na partię", NIEBIESKI)
-    podtytul = f'<span style="font-size:0.72rem;color:{KOLOR_PRZYGASZONY};">bieżący tydzień, kreska: {znacznik} serii</span>'
-    if tabela.empty or float(tabela.to_numpy().sum()) == 0:
+    if tabela.shape[1] < 2 or float(tabela.iloc[:, -2:].to_numpy().sum()) == 0:
         tresc = (f'<div style="min-height:80px;display:flex;align-items:center;justify-content:center;text-align:center;'
                  f'font-size:0.85rem;color:{KOLOR_PRZYGASZONY};">Pojawi się, gdy zapiszesz treningi z ćwiczeniami na powtórzenia.</div>')
+        legenda = ""
     else:
-        dane = pd.DataFrame({"Teraz": tabela.iloc[:, -1], "Srednia": tabela.iloc[:, :-1].mean(axis=1)})
-        dane = dane.sort_values(["Teraz", "Srednia"], ascending=False)
-        maks = max(20.0, float(dane["Teraz"].max()), float(dane["Srednia"].max()))
+        dane = pd.DataFrame({"Teraz": tabela.iloc[:, -1], "Poprzedni": tabela.iloc[:, -2]})
+        dane = dane[(dane["Teraz"] > 0) | (dane["Poprzedni"] > 0)].sort_values(["Teraz", "Poprzedni"], ascending=False)
+        maks = max(20.0, float(dane["Teraz"].max()), float(dane["Poprzedni"].max()))
+
+        def slupek(wartosc: float, kolor: str, wysokosc: int) -> str:
+            return (f'<div style="height:{wysokosc}px;border-radius:{wysokosc}px;background:{KOLOR_TLA_PIERSCIENIA};overflow:hidden;">'
+                    f'<div style="width:{100 * wartosc / maks:.1f}%;height:100%;border-radius:{wysokosc}px;background:{kolor};"></div></div>')
+
         wiersze = []
         for partia, r in dane.iterrows():
-            teraz, srednia = int(r["Teraz"]), float(r["Srednia"])
-            kolor = ZIELONY if teraz >= znacznik else KOLOR_SLUPKA
-            opis_sredniej = f"średnio w poprzednich tygodniach: {srednia:.1f}".replace(".", ",")
-            if teraz == 0 and srednia > 0:
-                opis_sredniej = "w tym tygodniu jeszcze nic, " + opis_sredniej
+            teraz, poprzedni = int(r["Teraz"]), int(r["Poprzedni"])
             wiersze.append(
                 f'<div style="padding:8px 0;border-bottom:1px solid {KOLOR_OBRAMOWANIA};">'
                 f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;">'
                 f'<span style="font-weight:600;color:{KOLOR_TEKSTU};">{html.escape(str(partia))}</span>'
                 f'<span style="font-weight:700;color:{KOLOR_TEKSTU};">{teraz}</span></div>'
-                f'<div style="position:relative;height:8px;border-radius:8px;background:{KOLOR_OBRAMOWANIA};margin-top:5px;overflow:visible;">'
-                f'<div style="width:{100 * teraz / maks:.1f}%;height:100%;border-radius:8px;background:{kolor};"></div>'
-                f'<div style="position:absolute;left:{100 * znacznik / maks:.1f}%;top:-3px;width:2px;height:14px;background:{KOLOR_TEKSTU};opacity:0.55;"></div></div>'
-                f'<div style="font-size:0.72rem;color:{KOLOR_PRZYGASZONY};margin-top:3px;">{opis_sredniej}</div></div>'
+                f'<div style="position:relative;margin-top:6px;">'
+                f'{slupek(poprzedni, KOLOR_POPRZEDNI_TYDZIEN, 6)}<div style="height:3px;"></div>{slupek(teraz, ZIELONY, 8)}'
+                f'<div style="position:absolute;left:{100 * znacznik / maks:.1f}%;top:-3px;bottom:-3px;width:2px;background:{KOLOR_TEKSTU};opacity:0.5;"></div>'
+                f'</div></div>'
             )
         tresc = "".join(wiersze)
+
+        def kwadracik(kolor: str) -> str:
+            return f'<span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:{kolor};margin-right:5px;"></span>'
+
+        legenda = (f'<div style="display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:0.75rem;color:{KOLOR_PRZYGASZONY};">'
+                   f'<span>{kwadracik(KOLOR_POPRZEDNI_TYDZIEN)}poprzedni tydzień</span>'
+                   f'<span>{kwadracik(ZIELONY)}ten tydzień</span>'
+                   f'<span><span style="display:inline-block;width:2px;height:10px;background:{KOLOR_TEKSTU};opacity:0.5;margin-right:6px;'
+                   f'vertical-align:-1px;"></span>{znacznik} serii</span></div>')
     return (
         f'<div style="{_tlo_karty(NIEBIESKI)}border:1px solid {KOLOR_OBRAMOWANIA};border-radius:16px;padding:16px 18px;box-sizing:border-box;min-width:0;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;">{tytul}{podtytul}</div>'
-        f'<div style="margin-top:8px;">{tresc}</div></div>'
+        f'{tytul}<div style="margin-top:8px;">{tresc}</div>{legenda}</div>'
     )
 
 
@@ -343,20 +372,17 @@ def widok_postepow() -> None:
     rek = rekordy(wpisy)
     nowe_rekordy = int((rek["Data"] >= pd.Timestamp(dzis - timedelta(days=29))).sum()) if not rek.empty else 0
     st.markdown(siatka_kart([
-        karta_liczby("Treningi", str(tren_30), "w 30 dni", f"poprzednie 30 dni: {tren_30_wczesniej}", NIEBIESKI, "dni z zapisanym treningiem"),
-        karta_liczby("Serie", f"{serie_7:.0f}", "w 7 dni", opis_serie, kolor_serie, "ostatnie 7 dni"),
-        karta_liczby("Regularność", str(streak), "tyg. z rzędu" if streak != 1 else "tydzień", "min. 1 trening w tygodniu" if streak else "zacznij nową serię", ZIELONY if streak >= 2 else NIEBIESKI, "bieżący tydzień nie przerywa serii"),
-        karta_liczby("Rekordy", str(nowe_rekordy), "w 30 dni", "nowe rekordy szacowanego 1RM" if nowe_rekordy else "jeszcze bez nowych rekordów", ZIELONY if nowe_rekordy else NIEBIESKI, "liczone z ćwiczeń z ciężarem"),
+        karta_liczby("Treningi", str(tren_30), "w 30 dni", f"poprzednie 30 dni: {tren_30_wczesniej}", NIEBIESKI),
+        karta_liczby("Serie", f"{serie_7:.0f}", "w 7 dni", opis_serie, kolor_serie),
+        karta_liczby("Regularność", str(streak), "tyg. z rzędu" if streak != 1 else "tydzień", "min. 1 trening w tygodniu" if streak else "zacznij nową serię", ZIELONY if streak >= 2 else NIEBIESKI),
+        karta_liczby("Rekordy", str(nowe_rekordy), "w 30 dni", "nowe rekordy szacowanego 1RM" if nowe_rekordy else "jeszcze bez nowych rekordów", ZIELONY if nowe_rekordy else NIEBIESKI),
     ]), unsafe_allow_html=True)
+    pytajnik("Treningi: dni z zapisanym treningiem. Serie: ostatnie 7 dni. Regularność: kolejne tygodnie z co najmniej jednym treningiem "
+             "(bieżący tydzień nie przerywa serii). Rekordy: liczone z ćwiczeń z ciężarem.")
 
     # --- tygodniowa objętość + rekordy ---
     metryki = ["Objętość (kg)", "Serie"] if ma_ciezar else ["Serie"]
-    st.markdown("<style>.st-key-post_metryka,.st-key-post_zakres{align-self:center !important;margin-left:auto !important;margin-right:auto !important;}</style>",
-                unsafe_allow_html=True)
-    st.markdown("&nbsp;", unsafe_allow_html=True)
-    _, srodek, _ = st.columns([1, 2, 1])
-    with srodek:
-        wybor_metryki = st.segmented_control("Metryka tygodnia", metryki, default=metryki[0], key="post_metryka", label_visibility="collapsed")
+    wybor_metryki = st.segmented_control("Metryka tygodnia", metryki, default=metryki[0], key="post_metryka", label_visibility="collapsed")
     kolumna = "Objetosc" if (wybor_metryki or metryki[0]) == "Objętość (kg)" else "Serie"
     tyg = tygodnie(wpisy, kolumna, dzis, 12)
     jednostka = "kg" if kolumna == "Objetosc" else "serii"
@@ -366,12 +392,23 @@ def widok_postepow() -> None:
         komunikat_pusty="Brak treningów w ostatnich 12 tygodniach.",
     )
     st.markdown(siatka_postepow([wykres, karta_rekordow(rek)]), unsafe_allow_html=True)
+    pytajnik("Tydzień po tygodniu: ostatnie 12 tygodni, ciemny słupek to bieżący tydzień.")
 
     # --- serie na partię mięśniową ---
     st.markdown(siatka_postepow([karta_partii(serie_na_partie(wpisy, partie_cwiczen(), dzis))], kolumny=1), unsafe_allow_html=True)
-    st.caption("Serie na partię: tylko serie robocze w ćwiczeniach liczonych w powtórzeniach (rozgrzewki i cardio nie wchodzą), "
-               "a ćwiczenie liczy się do jednej, przypisanej partii. Zwykle podaje się 10–20 serii tygodniowo na partię jako punkt "
-               "odniesienia dla przyrostu mięśni. To orientacja, nie norma.")
+    pytajnik("Serie na partię: tylko serie robocze w ćwiczeniach liczonych w powtórzeniach (rozgrzewki i cardio nie wchodzą), "
+             "a ćwiczenie liczy się do jednej, przypisanej partii. Zwykle podaje się 10–20 serii tygodniowo na partię jako punkt "
+             "odniesienia dla przyrostu mięśni. To orientacja, nie norma.")
+    partie = partie_cwiczen()
+    bez_partii = sorted(n for n in wpisy["Cwiczenie"].unique() if partie.get(n, "Inne") == "Inne"
+                        and jednostka_powtorzen(wpisy.loc[wpisy["Cwiczenie"] == n, "Jednostka"].iloc[0]))
+    if bez_partii:
+        with st.expander(f"Ćwiczenia bez partii ({len(bez_partii)})"):
+            if "post_partia_info" in st.session_state:
+                st.success(st.session_state.pop("post_partia_info"))
+            st.selectbox("Ćwiczenie", bez_partii, index=None, placeholder="Wybierz ćwiczenie...", key="post_partia_cwiczenie")
+            st.selectbox("Partia", [p for p in lista_partii() if p != "Inne"], index=None, placeholder="Wybierz partię...", key="post_partia_wybor")
+            st.button("Zapisz partię", use_container_width=True, on_click=_przypisz_z_formularza, key="post_partia_btn")
 
     # --- wybrane ćwiczenie ---
     st.subheader("Wybrane ćwiczenie")
@@ -415,12 +452,14 @@ def widok_postepow() -> None:
     opis_ostatniego = skroc_opis(opis_serii(zgrupuj_wiersze(ostatnie_wiersze), jednostka_cw))
     st.markdown(siatka_kart([
         karta_liczby("Najlepszy wynik", f"{najlepszy:.{miejsca}f}".replace(".", ",") if pd.notna(najlepszy) else "-", jedn,
-                     f"{dzien_najlepszego:%d.%m.%Y}" if dzien_najlepszego is not None else "", ZIELONY, "w całej historii"),
-        karta_liczby("Ostatni trening", f"{dzienne.index[-1]:%d.%m}", "", opis_ostatniego, NIEBIESKI,
-                     f"{(dzis - dzienne.index[-1].date()).days} dni temu"),
-        karta_liczby("Zmiana w zakresie", zmiana_txt, jedn if len(seria) >= 2 else "", opis_zmiany, kolor_zmiany, "od pierwszego do ostatniego pomiaru"),
-        karta_liczby("Treningi", str(len(dzienne)), "razy", "z tym ćwiczeniem w historii", NIEBIESKI, ""),
+                     f"{dzien_najlepszego:%d.%m.%Y}" if dzien_najlepszego is not None else "", ZIELONY),
+        karta_liczby("Ostatni trening", f"{dzienne.index[-1]:%d.%m}", f"{(dzis - dzienne.index[-1].date()).days} dni temu",
+                     opis_ostatniego, NIEBIESKI),
+        karta_liczby("Zmiana w zakresie", zmiana_txt, jedn if len(seria) >= 2 else "", opis_zmiany, kolor_zmiany),
+        karta_liczby("Treningi", str(len(dzienne)), "raz" if len(dzienne) == 1 else "razy", "z tym ćwiczeniem w historii", NIEBIESKI),
     ]), unsafe_allow_html=True)
+    pytajnik("Najlepszy wynik: w całej historii tego ćwiczenia. Zmiana w zakresie: od pierwszego do ostatniego pomiaru w wybranym "
+             "zakresie dni. Na wykresie każdy punkt to jeden dzień.")
     st.markdown(siatka_postepow([karta_wykresu(
         f"{cwiczenie}: {wybrana_metryka or list(nazwy_metryk)[0]}", "każdy punkt to jeden dzień",
         ogranicz_wysokosc(wykres_liniowy_svg(seria, jedn, miejsca=miejsca, wysokosc=190), 240),
@@ -440,5 +479,5 @@ def widok_postepow() -> None:
     tabela = pd.DataFrame(wiersze).sort_values("_d", ascending=False).drop(columns="_d")
     with st.expander(f"Historia ćwiczenia ({len(tabela)})"):
         st.dataframe(tabela, use_container_width=True, hide_index=True)
-    st.caption("Szacowane 1RM to wzór Epleya (ciężar × (1 + powtórzenia / 30)), liczony do 12 powtórzeń. To przybliżenie, nie test siłowy.")
+    pytajnik("Szacowane 1RM to wzór Epleya (ciężar × (1 + powtórzenia / 30)), liczony do 12 powtórzeń. To przybliżenie, nie test siłowy.")
 

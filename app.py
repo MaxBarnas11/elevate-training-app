@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import html
+import json
 from pathlib import Path
 
 import streamlit as st
@@ -16,16 +17,20 @@ from garminconnect import (
 
 import baza
 from garmin import formatuj_czas, synchronizuj_garmin
+from motywy import kolor_typu
 from styl import naglowek, zastosuj_styl
 from wykresy import MIN_DNI_DLA_PASMA, SEN_PASMO, pasmo_osobiste, rysuj_wykres
 from karty import (
     karta_pierscien, karta_wartosc, kolor_snu, status_snu,
-    kolor_czasu_snu, status_czasu_snu, naglowek_strony, format_czasu, ocena_wzgledem_pasma, oblicz_gotowosc, karta_tekst, siatka_kart
+    kolor_czasu_snu, status_czasu_snu, naglowek_strony, format_czasu, ocena_wzgledem_pasma, oblicz_gotowosc, karta_tekst, siatka_kart,
+    ZIELONY, ZOLTY, POMARANCZOWY, NIEBIESKI, KOLOR_PRZYGASZONY,
 )
 from karty_start import karta_kroki, karta_kalorie, karta_stres, karta_sen_fazy, karta_tydzien
+import dziennik
 import regeneracja
 import sesja_treningowa
 import postepy
+import uwagi
 from karty_presety import widok_presetu_html
 from presety import (wczytaj_presety_startowe, lista_presetow, wczytaj_cwiczenia_presetu,
                      zapisz_cwiczenia_presetu, JEDNOSTKI, ROLE, MAKS_GLOWNYCH)
@@ -37,8 +42,9 @@ from plan import (wczytaj_plan, zapisz_plan, podsumowanie_tygodnia, plan_na_dzie
 load_dotenv()
 
 NAZWA_APLIKACJI = "ELEVATE"
+_IKONA = Path(__file__).parent / "static" / "ikona-180.png"
 st.set_page_config(
-    page_title=NAZWA_APLIKACJI, page_icon="🏋️", layout="wide",
+    page_title=NAZWA_APLIKACJI, page_icon=str(_IKONA) if _IKONA.exists() else "🏋️", layout="wide",
     initial_sidebar_state="expanded",
 )
 # Dodatkowy CSS: czcionka bezszeryfowa, zaokrąglone rogi i subtelne cienie
@@ -64,7 +70,7 @@ CSS_DODATKOWY = """
 /* Telefon: nagłówek z logo ma tło, a treść zaczyna się pod nim (inaczej logo nachodzi na pierwszy element) */
 @media (max-width: 768px) {
     [data-testid="stHeader"] {
-        background: rgba(233, 223, 203, 0.92) !important;
+        background: var(--e-naglowek) !important;
         -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
     }
     [data-testid="stMainBlockContainer"],
@@ -84,27 +90,68 @@ html, body, .stApp { touch-action: manipulation; }
 [data-testid="stSidebarHeader"] { height: 5rem !important; }
 
 /* Menu boczne */
-[data-testid="stSidebar"] { border-right: 1px solid #CFC2A6; }
+[data-testid="stSidebar"] { border-right: 1px solid var(--e-obram); }
+/* Mniejsze odstępy pod listą stron, żeby „Ustawienia” były bliżej (mniej przewijania na telefonie) */
+[data-testid="stSidebarNav"], [data-testid="stSidebarNavItems"] { padding-bottom: 0 !important; margin-bottom: 0 !important; }
+[data-testid="stSidebarNavSeparator"] { margin: 0.2rem 0 !important; }
+[data-testid="stSidebarUserContent"] { padding-top: 0.4rem !important; }
+[data-testid="stSidebarUserContent"] [data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
+[data-testid="stSidebar"] hr { margin: 0.3rem 0 !important; }
+
+/* Strona Treningi: kafelki-przyciski (cały kafelek jest przyciskiem) z napisem i strzałką; każdy w swoim kolorze.
+   Kolor kafelka to zmienna --kafel; przycisk powrotu po wybraniu ma kolor wybranego trybu. */
+.st-key-btn_start, .st-key-tryby_powrot_start { --kafel: var(--e-przerwa); --mocnosc: 26%; }
+.st-key-btn_wlasny, .st-key-tryby_powrot_wlasny { --kafel: var(--e-serie); --mocnosc: 14%; }
+.st-key-btn_presety, .st-key-tryby_powrot_presety { --kafel: var(--e-typ_plyo); --mocnosc: 14%; }
+.st-key-btn_asystent, .st-key-tryby_powrot_asystent { --kafel: var(--e-zielony); --mocnosc: 14%; }
+.st-key-tryby_wiersz button, [class*="st-key-tryby_powrot_"] button {
+    position: relative; justify-content: flex-start !important; min-height: 4.2rem; width: 100% !important;
+    padding: 0 68px 0 20px !important; border-radius: 16px !important; white-space: nowrap;
+    background: linear-gradient(100deg, color-mix(in srgb, var(--kafel) var(--mocnosc), var(--e-karta)) 0%, var(--e-karta) 75%) !important;
+    border: 2px solid color-mix(in srgb, var(--kafel) 50%, var(--e-obram2)) !important;
+    box-shadow: 0 4px 14px var(--e-cien_s); color: var(--e-tekst) !important;
+}
+.st-key-tryby_wiersz button p, [class*="st-key-tryby_powrot_"] button p {
+    font-size: 1.1rem !important; font-weight: 700 !important; text-align: left; margin: 0; white-space: nowrap;
+}
+/* Pigułka ze strzałką (strzałka to maska SVG, więc leży dokładnie na środku pigułki) */
+.st-key-tryby_wiersz button::after, [class*="st-key-tryby_powrot_"] button::after {
+    content: ""; position: absolute; right: 14px; top: 50%; width: 38px; height: 38px; margin-top: -19px;
+    border-radius: 11px; background: var(--kafel);
+}
+.st-key-tryby_wiersz button::before, [class*="st-key-tryby_powrot_"] button::before {
+    content: ""; position: absolute; right: 14px; top: 50%; width: 38px; height: 38px; margin-top: -19px; z-index: 1;
+    background: var(--e-przycisk_tekst);
+    -webkit-mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 6l6 6-6 6M12 6l6 6-6 6' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 22px 22px no-repeat; mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 6l6 6-6 6M12 6l6 6-6 6' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 22px 22px no-repeat;
+}
+/* Przycisk powrotu: niższy, pigułka ze strzałką w lewo po lewej stronie */
+[class*="st-key-tryby_powrot_"] button { min-height: 3.2rem; padding: 0 20px 0 64px !important; }
+[class*="st-key-tryby_powrot_"] button::after, [class*="st-key-tryby_powrot_"] button::before {
+    right: auto; left: 12px; width: 34px; height: 34px; margin-top: -17px;
+}
+[class*="st-key-tryby_powrot_"] button::before {
+    -webkit-mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M15 6l-6 6 6 6' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 22px 22px no-repeat; mask: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M15 6l-6 6 6 6' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 22px 22px no-repeat;
+}
 
 /* Kafelki metryk i formularze */
 [data-testid="stMetric"], [data-testid="stForm"] {
-    background: #F4ECDC;
-    border: 2px solid #BFAE86;
+    background: var(--e-karta);
+    border: 2px solid var(--e-obram2);
     border-radius: 16px;
-    box-shadow: 0 4px 14px rgba(60, 45, 20, 0.10);
+    box-shadow: 0 4px 14px var(--e-cien_s);
 }
 [data-testid="stMetric"] { padding: 16px 18px; }
 [data-testid="stExpander"] {
-    border: 2px solid #BFAE86 !important;
+    border: 2px solid var(--e-obram2) !important;
     border-radius: 14px !important;
     overflow: hidden;
-    background: #F4ECDC;
+    background: var(--e-karta);
 }
 [data-testid="stAlert"] { border-radius: 12px; }
 [data-testid="stDataFrame"] {
     border-radius: 12px;
     overflow: hidden;
-    border: 1px solid #CFC2A6;
+    border: 1px solid var(--e-obram);
 }
 [data-testid="stVerticalBlockBorderWrapper"] { border-radius: 16px; }
 
@@ -112,40 +159,67 @@ html, body, .stApp { touch-action: manipulation; }
 [data-baseweb="input"], [data-baseweb="base-input"], [data-baseweb="select"] > div,
 .stTextInput input, .stNumberInput input, .stTextArea textarea {
     border-radius: 12px !important;
-    background: #F4ECDC !important;
+    background: var(--e-pill) !important;
 }
 
 /* Przyciski */
 .stButton > button, [data-testid="stFormSubmitButton"] > button {
     border-radius: 12px;
-    border: 2px solid #BFAE86;
+    border: 2px solid var(--e-obram2);
     transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
 }
 /* Przycisk główny (ciemny) ma ciemną ramkę, żeby nie było jasnego obrysu */
 .stButton > button[kind="primary"], .stButton > button[data-testid="stBaseButton-primary"],
 [data-testid="stFormSubmitButton"] > button[kind="primaryFormSubmit"] {
-    border-color: #1B1B1A;
+    border-color: var(--e-przycisk);
+    background-color: var(--e-przycisk);
+    background-image: var(--e-przycisk-grad);
+    color: var(--e-przycisk_tekst);
 }
+.stButton > button[kind="primary"] p, .stButton > button[data-testid="stBaseButton-primary"] p,
+[data-testid="stFormSubmitButton"] > button[kind="primaryFormSubmit"] p { color: var(--e-przycisk_tekst); }
 .stButton > button:hover, [data-testid="stFormSubmitButton"] > button:hover {
-    border-color: #9C8A5E;
+    border-color: var(--e-obram_hover);
     transform: translateY(-1px);
-    box-shadow: 0 6px 16px rgba(60, 45, 20, 0.18);
+    box-shadow: 0 6px 16px var(--e-cien_h);
 }
+
+/* Znak „?” z objaśnieniami: większy i z większym polem dotyku (kciuk na telefonie) */
+[data-testid="stTooltipIcon"] svg { width: 1.45rem !important; height: 1.45rem !important; }
+[data-testid="stTooltipIcon"] { color: var(--e-przyg) !important; }
+[data-testid="stTooltipHoverTarget"] { padding: 10px !important; margin: -10px !important; }
+/* Bez zaznaczania tekstu przy dłuższym dotknięciu (iPhone zaznaczał słowo obok znaku „?”); pola do wpisywania działają normalnie */
+.stApp, .stApp * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.stApp input, .stApp textarea, .stApp [contenteditable="true"] { -webkit-user-select: text !important; user-select: text !important; }
+/* Ikonka linku przy nagłówkach jest niepotrzebna */
+[data-testid="stHeaderActionElements"] { display: none !important; }
+
+/* Okienko z objaśnieniem nie może być szersze niż ekran telefonu (inaczej prawa część tekstu ucina się za krawędzią) */
+[data-baseweb="popover"], [data-baseweb="popover"] > div, [data-testid="stTooltipContent"] {
+    max-width: min(22rem, calc(100vw - 24px)) !important;
+    box-sizing: border-box !important;
+}
+[data-testid="stTooltipContent"] { white-space: normal !important; overflow-wrap: anywhere !important; }
+
+/* Dziennik ręczny: pola obok siebie także na telefonie; usuwanie uwag na czerwono */
+.st-key-dz_wiersz [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; gap: 8px !important; }
+.st-key-dz_wiersz [data-testid="stColumn"], .st-key-dz_wiersz [data-testid="column"] { min-width: 0 !important; flex: 1 1 0 !important; width: auto !important; }
+[class*="st-key-uwaga_u_"] button { color: var(--e-kasuj); border-color: var(--e-kasuj_ramka); }
 
 /* Poświata na kafelkach (kontenery z ramką), formularzach i panelach */
 [data-testid="stVerticalBlockBorderWrapper"],
 [data-testid="stForm"],
 [data-testid="stExpander"] {
-    background: radial-gradient(ellipse at 50% 0%, #9A7B4A44 0%, transparent 72%), #F1E7D2;
-    box-shadow: 0 6px 18px rgba(90, 65, 25, 0.14);
-    border: 2px solid #BFAE86 !important;
+    background: radial-gradient(ellipse at 50% 0%, var(--e-kafelek_glow) 0%, transparent 72%), var(--e-kafelek);
+    box-shadow: 0 6px 18px var(--e-cien_m);
+    border: 2px solid var(--e-obram2) !important;
 }
 /* Kafelki i bloki ćwiczeń wskazane po kluczu (najpewniejszy sposób w nowych wersjach Streamlita) */
 [class*="st-key-kafelek_"], [class*="st-key-blok_cwiczenia_"] {
-    background: radial-gradient(ellipse at 50% 0%, #9A7B4A44 0%, transparent 72%), #F1E7D2 !important;
-    border: 2px solid #BFAE86 !important;
+    background: radial-gradient(ellipse at 50% 0%, var(--e-kafelek_glow) 0%, transparent 72%), var(--e-kafelek) !important;
+    border: 2px solid var(--e-obram2) !important;
     border-radius: 16px !important;
-    box-shadow: 0 6px 18px rgba(90, 65, 25, 0.14) !important;
+    box-shadow: 0 6px 18px var(--e-cien_m) !important;
 }
 /* Kontener w kontenerze nie ma własnej poświaty (żeby nie dublować) */
 [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlockBorderWrapper"] {
@@ -158,19 +232,20 @@ html, body, .stApp { touch-action: manipulation; }
 CSS_DZISIEJSZY_TRENING = """
 <style>
 @keyframes dzis-puls {
-    0%   { box-shadow: 0 0 0 0 rgba(232, 117, 26, 0.55); }
-    70%  { box-shadow: 0 0 0 9px rgba(232, 117, 26, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(232, 117, 26, 0); }
+    0%   { box-shadow: 0 0 0 0 var(--e-puls); }
+    70%  { box-shadow: 0 0 0 9px var(--e-puls0); }
+    100% { box-shadow: 0 0 0 0 var(--e-puls0); }
 }
 a[data-testid="stSidebarNavLink"][href$="/dzis"],
 [data-testid="stSidebarNav"] a[href$="/dzis"] {
-    background: #1B1B1A !important;
+    background-color: var(--e-przycisk) !important;
+    background-image: var(--e-przycisk-grad) !important;
     border-radius: 12px !important;
     animation: dzis-puls 2.4s ease-out infinite;
 }
 a[data-testid="stSidebarNavLink"][href$="/dzis"] *,
 [data-testid="stSidebarNav"] a[href$="/dzis"] * {
-    color: #F4ECDC !important;
+    color: var(--e-dzis_tekst) !important;
     font-weight: 600 !important;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -187,6 +262,27 @@ zastosuj_styl()
 # Logo nad menu bocznym (plik logo.svg leży obok app.py)
 st.logo(str(Path(__file__).parent / "logo.svg"), size="large")
 
+
+def css_logo() -> str:
+    """Plik logo.svg jest ciemny; w ciemnym motywie Streamlita odwracamy go na jasny.
+    Motyw podaje st.context.theme.type (wybór w aplikacji lub menu ⋮); gdy go brak, decyduje ustawienie systemu."""
+    cel = 'img[data-testid*="Logo" i], img[class*="Logo" i]'
+    odwroc = f"{cel}{{filter:invert(1) brightness(1.08);}}"
+    try:
+        motyw = st.context.theme.type
+    except Exception:
+        motyw = None
+    if motyw == "dark":
+        return f"<style>{odwroc}</style>"
+    if motyw == "light":
+        return ""
+    return f"<style>@media (prefers-color-scheme: dark){{{odwroc}}}</style>"
+
+
+_css_logo = css_logo()
+if _css_logo:
+    st.markdown(_css_logo, unsafe_allow_html=True)
+
 # Blokada przybliżania szczypaniem (iPhone ignoruje user-scalable=no, więc blokujemy gesty skryptem).
 # Skrypt działa w ukrytej ramce i zakłada zmiany na stronie nadrzędnej. Wyłączenie przybliżania utrudnia obsługę
 # osobom słabowidzącym; jeśli aplikacja trafi do innych użytkowników, warto to usunąć albo zostawić do wyboru.
@@ -196,6 +292,14 @@ with st.sidebar:
         const d = window.parent.document;
         if (!d.__bezZoomu) {
             d.__bezZoomu = true;
+        // Ikona na ekranie początkowym iPhone'a (plik leży w folderze static, serwowanym przez Streamlit)
+        d.querySelectorAll('link[rel~="apple-touch-icon"]').forEach(function (l) { l.remove(); });
+        const ik = d.createElement('link');
+        ik.rel = 'apple-touch-icon'; ik.sizes = '180x180'; ik.href = '/app/static/ikona-180.png';
+        d.head.appendChild(ik);
+        if (!d.querySelector('meta[name="apple-mobile-web-app-title"]')) {
+            const t = d.createElement('meta'); t.name = 'apple-mobile-web-app-title'; t.content = 'ELEVATE'; d.head.appendChild(t);
+        }
             ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (e) {
                 d.addEventListener(e, function (ev) { ev.preventDefault(); }, {passive: false});
             });
@@ -208,6 +312,127 @@ with st.sidebar:
         </script>""",
         height=0,
     )
+
+# Motyw aplikacji. Streamlit zapamiętuje wybór motywu (System / Light / Dark) w przeglądarce pod kluczem
+# "stActiveTheme-<ścieżka strony>-v2". Przełącznik w Ustawieniach zapisuje wybór tam i odświeża stronę, więc zmienia
+# wygląd całej aplikacji (także pól, list i okien Streamlita), tak samo jak menu ⋮ → Settings.
+MOTYWY_ZAPIS = {"Auto": "System", "Jasny": "Light", "Ciemny": "Dark"}
+
+
+def wczytaj_motyw() -> str:
+    try:
+        w = sesja_treningowa.wczytaj_ustawienie("motyw", "Auto")
+    except Exception:
+        return "Auto"
+    return w if w in MOTYWY_ZAPIS else "Auto"
+
+
+def _zmien_motyw() -> None:
+    wybor = st.session_state.get("motyw_wybor")
+    if wybor not in MOTYWY_ZAPIS:      # ponowne stuknięcie w wybraną opcję zdejmuje zaznaczenie, więc je przywracamy
+        st.session_state["motyw_wybor"] = wczytaj_motyw()
+        return
+    sesja_treningowa.zapisz_ustawienie("motyw", wybor)
+    st.session_state["motyw_zastosuj"] = wybor
+
+
+def skrypt_motywu(wybor: str) -> str:
+    """Skrypt (w ukrytej ramce): zapisuje wybór motywu dla wszystkich stron aplikacji i odświeża stronę."""
+    wartosc = json.dumps(MOTYWY_ZAPIS[wybor])
+    return f"""<script>
+    (function () {{
+        try {{
+            const w = window.parent;
+            const wartosc = JSON.stringify({wartosc});
+            const sciezki = new Set([w.location.pathname, '/']);
+            w.document.querySelectorAll('a[href]').forEach(function (a) {{
+                try {{
+                    const u = new URL(a.href, w.location.href);
+                    if (u.origin === w.location.origin) {{ sciezki.add(u.pathname); }}
+                }} catch (e) {{}}
+            }});
+            sciezki.forEach(function (p) {{ w.localStorage.setItem('stActiveTheme-' + p + '-v2', wartosc); }});
+            w.location.reload();
+        }} catch (e) {{}}
+    }})();
+    </script>"""
+
+
+# Tryb bez zegarka: przełącznik w Ustawieniach. Wyłączony Garmin = brak synchronizacji, a na Starcie ręczny wpis snu, wagi i energii.
+def garmin_wlaczony() -> bool:
+    try:
+        return sesja_treningowa.wczytaj_ustawienie("garmin", "1") != "0"
+    except Exception:
+        return True
+
+
+def _zapisz_garmin() -> None:
+    sesja_treningowa.zapisz_ustawienie("garmin", "1" if st.session_state.get("garmin_wl") else "0")
+
+
+def _zapisz_dziennik() -> None:
+    s = st.session_state
+    dziennik.zapisz(date.today(), s.get("dz_sen"), s.get("dz_waga"), s.get("dz_energia"))
+    st.toast("Zapisane.")
+
+
+def _status_energii(e: int | None) -> tuple[str, str]:
+    if e is None:
+        return KOLOR_PRZYGASZONY, "Wpisz energię"
+    return (ZIELONY if e >= 4 else ZOLTY if e == 3 else POMARANCZOWY), dziennik.ENERGIA[e]
+
+
+def kafelki_reczne() -> list[str]:
+    """Kafelki dnia z ręcznego dziennika: sen, waga, energia."""
+    dz = dziennik.dzien()
+    hist = dziennik.wczytaj()
+    sen = dz.get("Sen_godz")
+    sen_min = sen * 60 if sen is not None else None
+    wagi = hist["Waga"].dropna() if not hist.empty else None
+    waga = dz.get("Waga")
+    podpis_wagi = ""
+    if wagi is not None and len(wagi):
+        if waga is None:
+            waga = float(wagi.iloc[-1])
+            podpis_wagi = f"ostatni wpis: {wagi.index[-1]:%d.%m}"
+        elif len(wagi) >= 2:
+            roznica = float(wagi.iloc[-1] - wagi.iloc[-2])
+            podpis_wagi = f"{roznica:+.1f} kg od poprzedniego".replace(".", ",")
+    seria_wagi = wagi.tail(14).tolist() if wagi is not None else []
+    energia = dz.get("Energia")
+    kolor_en, status_en = _status_energii(energia)
+    return [
+        karta_pierscien("Sen", sen_min, 480, kolor_czasu_snu(sen_min), status_czasu_snu(sen_min), "cel: 8h",
+                        tekst_srodka=format_czasu(sen_min) if sen_min is not None else None),
+        karta_wartosc("Waga", waga, "kg", NIEBIESKI, podpis_wagi, seria_wagi if len(seria_wagi) >= 2 else None, miejsca=1),
+        karta_pierscien("Energia", energia, 5, kolor_en, status_en, "", tekst_srodka=f"{energia}/5" if energia is not None else None),
+    ]
+
+
+def formularz_dzienny() -> None:
+    """Ręczny wpis dnia (sen, waga, energia) dla osób bez zegarka; pola wypełnione dzisiejszymi wartościami."""
+    dz = dziennik.dzien()
+    with st.form("form_dziennik"):
+        with st.container(key="dz_wiersz"):
+            k1, k2 = st.columns(2)
+            k1.number_input("Sen (godz.)", min_value=0.0, max_value=16.0, value=dz.get("Sen_godz"), step=0.5, format="%.1f", key="dz_sen")
+            k2.number_input("Waga (kg)", min_value=30.0, max_value=300.0, value=dz.get("Waga"), step=0.1, format="%.1f", key="dz_waga")
+        sesja_treningowa.rzad_w_jednej_linii("dz_energia")
+        st.segmented_control("Energia", [1, 2, 3, 4, 5], default=dz.get("Energia"), key="dz_energia",
+                             help="1 = bardzo niska, 5 = świetna.")
+        st.form_submit_button("Zapisz", on_click=_zapisz_dziennik, use_container_width=True)
+
+
+# Uwagi do aplikacji (przycisk w pasku bocznym): zapis w bazie i powiadomienie na telefon
+def _wyslij_uwage() -> None:
+    tekst = (st.session_state.get("uwaga_tekst") or "").strip()
+    if not tekst:
+        st.toast("Najpierw wpisz uwagę.")
+        return
+    _, wyslano = uwagi.zapisz(tekst, st.session_state.get("strona_tytul", ""))
+    st.session_state["uwaga_tekst"] = ""
+    st.toast("Uwaga zapisana i wysłana na telefon." if wyslano else "Uwaga zapisana (powiadomienie nie poszło).")
+
 
 # Od ilu dni z wpisaną wagą pokazujemy wykres wagi
 MIN_DNI_WAGI = 3
@@ -323,10 +548,14 @@ def strona_start():
         unsafe_allow_html=True,
     )
     # Zwykły napis zamiast czarnego spinnera; znika, gdy dane są gotowe
-    info = st.empty()
-    info.caption("⏳ Synchronizuję dane z Garmina... (przy limicie 429 może to potrwać do minuty)")
-    dane_garmin, blad_garmin = pobierz_dane_garmin()
-    info.empty()
+    reczny = not garmin_wlaczony()
+    if reczny:
+        dane_garmin, blad_garmin = None, None
+    else:
+        info = st.empty()
+        info.caption("⏳ Synchronizacja z Garminem…")
+        dane_garmin, blad_garmin = pobierz_dane_garmin()
+        info.empty()
     st.subheader("Jak się dziś masz?")
 
         # Pole na odpis o samopoczuciu; Enter wysyła formularz
@@ -334,7 +563,7 @@ def strona_start():
         kol_pole, kol_przycisk = st.columns([5, 1])
         wpis = kol_pole.text_input(
             "Samopoczucie",
-            placeholder="Napisz, jak się czujesz (np. bolą plecy, mało snu, dużo energii)...",
+            placeholder="Jak się czujesz…",
             label_visibility="collapsed",
         )
         wyslano = kol_przycisk.form_submit_button("Zapisz", use_container_width=True)
@@ -349,6 +578,11 @@ def strona_start():
     # Informacja, jeśli baza musiała zostać odtworzona
     if komunikat_bazy:
         st.warning(komunikat_bazy)
+
+    if reczny:
+        st.subheader("Dziś w liczbach")
+        formularz_dzienny()
+        st.markdown(siatka_kart(kafelki_reczne() + [karta_tydzien(podsumowanie_tygodnia())]), unsafe_allow_html=True)
 
     # Błędy Garmina pokazujemy tutaj
     if blad_garmin is not None:
@@ -417,13 +651,17 @@ def strona_start():
 
 def strona_regeneracja():
     st.markdown(naglowek_strony("Regeneracja", "Trendy snu, tętna, HRV i wagi"), unsafe_allow_html=True)
-    regeneracja.widok_regeneracji()
+    regeneracja.widok_regeneracji(reczny=not garmin_wlaczony())
 
 # ---------------------------------------------------------------
 # WIDOK: WŁASNY TRENING (formularz z bazą ćwiczeń)
 # ---------------------------------------------------------------
 def widok_wlasny_trening():
-    st.subheader("Dodaj trening")
+    # Prowadzony trening od zera (bez presetu): ćwiczenia dodajesz w trakcie, nazwę możesz nadać na końcu
+    st.button("Zacznij pusty trening (bez presetu)", type="primary", use_container_width=True, key="start_pusty_btn",
+              on_click=sesja_treningowa.rozpocznij_pusty,
+              help="Prowadzony trening bez rozpiski: ćwiczenia dodajesz w trakcie, a nazwę (preset) możesz nadać na końcu.")
+    st.subheader("Dodaj trening po fakcie")
 
     # Komunikaty po kliknięciu przycisku Zapisz
     if "komunikat_zapisu" in st.session_state:
@@ -507,35 +745,25 @@ def widok_wlasny_trening():
 
 def strona_historia():
     st.markdown(naglowek_strony("Historia i Kalendarz"), unsafe_allow_html=True)
-    st.subheader("Historia Treningów")
     sesja_treningowa.widok_historii()
-
-    historia_sesji = baza.wczytaj_historie_sesji()
-    if not historia_sesji.empty:
-        with st.expander("Pełna tabela (surowe dane)"):
-            st.dataframe(historia_sesji, use_container_width=True, hide_index=True)
-
-    # Stare wpisy z wersji z jednym ćwiczeniem zostają w archiwum
-    stare_wpisy = baza.wczytaj_historie()
-    if not stare_wpisy.empty:
-        with st.expander("Archiwum: stare wpisy z poprzedniej wersji"):
-            st.dataframe(stare_wpisy, use_container_width=True, hide_index=True)
 
     wpisy = baza.wczytaj_ostatnie_samopoczucie(30)
     with st.expander(f"Samopoczucie: zapisane wpisy ({len(wpisy)})"):
         if wpisy.empty:
-            st.caption("Brak wpisów. Dodasz je na stronie Start.")
+            st.caption("Brak wpisów.")
         else:
             for _, wiersz in wpisy.iterrows():
                 st.markdown(f"**{wiersz['Zapisano'][:16]}**: {wiersz['Tekst']}")
                 if wiersz["Odpowiedz"]:
                     st.caption(f"Odpowiedź: {wiersz['Odpowiedz']}")
+            if st.button("Usuń wszystkie wpisy", key="hist_sam_usun", use_container_width=True):
+                sesja_treningowa.okno_usuniecia_samopoczucia(sesja_treningowa.liczba_wpisow_samopoczucia())
 
 
 @st.dialog("Edytuj preset", width="large")
 def okno_edycji_presetu(preset_id: int, nazwa: str):
     """Okno z edytorem ćwiczeń presetu (otwiera się po kliknięciu 'Edytuj preset')."""
-    st.caption(f"{nazwa}: zmieniaj ćwiczenia, serie i powtórzenia, dodawaj lub usuwaj wiersze.")
+    st.markdown(f"**{nazwa}**", help="Zmieniaj ćwiczenia, serie i powtórzenia, dodawaj lub usuwaj wiersze.")
     dane = wczytaj_cwiczenia_presetu(preset_id)
     edytowane = st.data_editor(
         dane,
@@ -569,7 +797,10 @@ def widok_presetow():
 
     # Filtr kategorii (przyciski-pigułki); gdy nic nie zaznaczone, pokazujemy wszystko
     kategorie = ["Wszystkie"] + lista["Kategoria"].dropna().unique().tolist()
-    kategoria = st.pills("Kategoria", kategorie, default="Wszystkie", label_visibility="collapsed")
+    # filtry w jednej linii (ta sama kontrolka i ten sam CSS co wybór przerw, który sprawdziliśmy na telefonie)
+    sesja_treningowa.rzad_w_jednej_linii("presety_kategoria")
+    kategoria = st.segmented_control("Kategoria", kategorie, default="Wszystkie", key="presety_kategoria",
+                                     label_visibility="collapsed")
     if kategoria and kategoria != "Wszystkie":
         lista = lista[lista["Kategoria"] == kategoria]
 
@@ -616,28 +847,16 @@ def strona_treningi():
     st.session_state.setdefault("tryb_treningu", None)   # na starcie nic nie jest wybrane
     aktywny = st.session_state["tryb_treningu"]
 
-    kolumny = st.columns(len(TRYBY_TRENINGU))
-    for kol, (klucz, (tytul, opis, _)) in zip(kolumny, TRYBY_TRENINGU.items()):
-        with kol.container(border=True, height=280, key=f"kafelek_{klucz}"):
-            # tekst w osobnym pojemniku o stałej wysokości, dzięki temu przyciski są na jednej linii
-            with st.container(border=False, height=160):
-                st.subheader(tytul)
-                st.caption(opis)
-
-            # przycisk jest w kafelku (to samo wcięcie co "with st.container" wyżej)
-            wybrany = aktywny == klucz
-            st.button(
-                "Zamknij" if wybrany else "Otwórz",
-                key=f"btn_{klucz}",
-                type="primary" if wybrany else "secondary",
-                on_click=przelacz_tryb_treningu, args=(klucz,),
-                use_container_width=True,
-            )
-
+    # Menu: cztery kafelki-przyciski. Po wybraniu menu znika, a w jego miejscu pojawia się wybrany ekran z przyciskiem powrotu.
     if aktywny is None:
-        st.caption("Wybierz jedną z opcji powyżej.")
+        with st.container(key="tryby_wiersz"):
+            for klucz, (tytul, opis, _) in TRYBY_TRENINGU.items():
+                st.button(tytul, key=f"btn_{klucz}", on_click=przelacz_tryb_treningu, args=(klucz,),
+                          use_container_width=True, help=opis)
     else:
-        st.divider()
+        with st.container(key=f"tryby_powrot_{aktywny}"):
+            st.button(TRYBY_TRENINGU[aktywny][0], key="btn_wroc", on_click=przelacz_tryb_treningu, args=(aktywny,),
+                      use_container_width=True, help="Wróć do wyboru rodzaju treningu.")
         TRYBY_TRENINGU[aktywny][2]()
 
 
@@ -650,12 +869,20 @@ def _pasek_tygodnia_html(plan) -> str:
     elementy = []
     for _, d in plan.iterrows():
         akt = bool(d["Aktywny"])
-        tlo = "#1B1B1A" if akt else "#F4ECDC"
-        tekst = "#E9DFCB" if akt else "#6B6355"
+        k_typu = kolor_typu(d["Typ"]) if akt else None
+        if k_typu:          # dzień treningowy w kolorze rodzaju treningu (Dół, Góra, Plyo, Cardio)
+            tlo = f"background:color-mix(in srgb, {k_typu} 16%, var(--e-karta));border-color:{k_typu} !important;"
+            tekst = "var(--e-tekst)"
+        elif akt:
+            tlo = "background-color:var(--e-przycisk);background-image:var(--e-przycisk-grad);"
+            tekst = "var(--e-dzis_tekst)"
+        else:
+            tlo = "background:var(--e-karta);"
+            tekst = "var(--e-przyg)"
         podpis = (nazwa_krotka(d["Typ"]) or "trening") if akt else "wolne"
         elementy.append(
             f'<div style="flex:1;min-width:0;text-align:center;padding:12px 4px;border-radius:14px;'
-            f'border:2px solid #BFAE86;background:{tlo};color:{tekst};">'
+            f'border:2px solid var(--e-obram2);{tlo}color:{tekst};">'
             f'<div style="font-weight:700;">{SKROTY_DNI[int(d["Dzien"])]}</div>'
             f'<div style="font-size:0.72rem;opacity:0.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{podpis}</div>'
             f'</div>'
@@ -755,6 +982,7 @@ strony += [
     st.Page(strona_plan, title="Mój plan", icon=":material/event_note:"),
 ]
 wybrana = st.navigation(strony)
+st.session_state["strona_tytul"] = wybrana.title
 
 # Dół menu: połączenie z Garminem i ustawienia (pojawia się pod listą stron)
 with st.sidebar:
@@ -764,18 +992,39 @@ with st.sidebar:
         if plan_jutro["Godzina"]:
             opis_jutro += f" · {plan_jutro['Godzina']}"
         st.markdown(
-            '<div style="margin-top:8px;padding:10px 14px;border:2px solid #BFAE86;border-radius:12px;background:#F4ECDC;">'
-            '<div style="font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;color:#6B6355;">Jutro w planie</div>'
-            f'<div style="font-weight:700;color:#1B1B1A;">{opis_jutro}</div></div>',
+            '<div style="padding-bottom:12px;"><div style="padding:10px 14px;border:2px solid var(--e-obram2);border-radius:12px;background:var(--e-karta);">'
+            '<div style="font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--e-przyg);">Jutro w planie</div>'
+            f'<div style="font-weight:700;color:var(--e-tekst);">{opis_jutro}</div></div></div>',
             unsafe_allow_html=True,
         )
         if sesja_treningowa.aktywna():
-         st.markdown('<div style="margin-top:8px;padding:10px 14px;border:2px solid #3F9A5A;border-radius:12px;background:#F4ECDC;font-weight:700;color:#1B1B1A;">Trening w toku<div style="font-weight:400;font-size:0.8rem;color:#6B6355;">wróć do zakładki Treningi</div></div>', unsafe_allow_html=True)
-    st.divider()
+         st.markdown('<div style="padding-bottom:12px;"><div style="padding:10px 14px;border:2px solid var(--e-zielony);border-radius:12px;background:var(--e-karta);font-weight:700;color:var(--e-tekst);">Trening w toku<div style="font-weight:400;font-size:0.8rem;color:var(--e-przyg);">wróć do zakładki Treningi</div></div></div>', unsafe_allow_html=True)
     with st.expander("⚙️ Ustawienia i połączenie"):
-        st.caption("Status połączenia widać na stronie Start.")
-        st.button("🔄 Odśwież dane z Garmina", on_click=st.cache_data.clear, use_container_width=True)
-        st.caption("Dane logowania do Garmina są w pliku .env na tym komputerze.")
+        sesja_treningowa.rzad_w_jednej_linii("motyw_wybor")
+        st.segmented_control("Motyw", list(MOTYWY_ZAPIS), default=wczytaj_motyw(), key="motyw_wybor",
+                             on_change=_zmien_motyw,
+                             help="Auto idzie za ustawieniem telefonu lub komputera (jasny albo ciemny). Po zmianie strona odświeży się sama.")
+        st.toggle("Mam zegarek Garmin", value=garmin_wlaczony(), key="garmin_wl", on_change=_zapisz_garmin,
+                  help="Wyłącz, jeśli nie masz zegarka. Wtedy zamiast danych z Garmina wpisujesz sen, wagę i energię ręcznie na stronie Start.")
+        if garmin_wlaczony():
+            st.button("🔄 Odśwież dane z Garmina", on_click=st.cache_data.clear, use_container_width=True,
+                      help="Status połączenia widać na stronie Start. Dane logowania do Garmina są w pliku .env na tym komputerze.")
+    with st.expander("💬 Zgłoś uwagę"):
+        st.text_area("Uwaga", key="uwaga_tekst", height=110, placeholder="Co poprawić, co przeszkadza, jaki pomysł...",
+                     label_visibility="collapsed")
+        st.button("Wyślij", key="uwaga_wyslij", on_click=_wyslij_uwage, use_container_width=True, type="primary",
+                  help="Uwaga zapisuje się w aplikacji i przychodzi jako powiadomienie na telefon (ntfy).")
+    _zapisane_uwagi = uwagi.lista(10)
+    if _zapisane_uwagi:
+        with st.expander(f"📝 Zapisane uwagi ({uwagi.ile()})"):
+            for _u in _zapisane_uwagi:
+                _opis = html.escape(f"{_u['zapisano'][5:]} · {_u['strona']}" if _u["strona"] else _u["zapisano"][5:])
+                _tresc = html.escape(_u["tresc"]).replace("\n", "<br>")
+                st.markdown(f"**{_opis}**<br>{_tresc}", unsafe_allow_html=True)
+                st.button("Usuń", key=f"uwaga_u_{_u['id']}", on_click=uwagi.usun, args=(_u["id"],))
+    _wybrany_motyw = st.session_state.pop("motyw_zastosuj", None)
+    if _wybrany_motyw in MOTYWY_ZAPIS:
+        components.html(skrypt_motywu(_wybrany_motyw), height=0)
 
 # Uruchamia wybraną stronę. Musi być na końcu, po definicjach wszystkich funkcji.
 wybrana.run()

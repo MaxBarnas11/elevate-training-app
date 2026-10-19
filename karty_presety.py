@@ -13,27 +13,27 @@ KARTY_CWICZEN_CSS = """
     to   { opacity: 1; transform: translateY(0); }
 }
 .cw-top { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:4px; }
-.cw-tytul { font-size:1.4rem; font-weight:700; color:#1B1B1A; }
-.cw-tagi span { display:inline-block; background:#F4ECDC; border:1px solid #CFC2A6; border-radius:999px;
-                padding:4px 12px; font-size:0.8rem; color:#6B6355; margin-left:6px; }
-.cw-cel { color:#6B6355; font-size:0.9rem; margin:2px 0 6px 0; }
-.cw-sekcja { font-size:0.8rem; letter-spacing:0.12em; text-transform:uppercase; color:#6B6355; margin:18px 0 10px 0; }
+.cw-tytul { font-size:1.4rem; font-weight:700; color:var(--e-tekst); }
+.cw-tagi span { display:inline-block; background:var(--e-pill); border:1px solid var(--e-obram); border-radius:999px;
+                padding:4px 12px; font-size:0.8rem; color:var(--e-przyg); margin-left:6px; }
+.cw-cel { color:var(--e-przyg); font-size:0.9rem; margin:2px 0 6px 0; }
+.cw-sekcja { font-size:0.8rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--e-przyg); margin:18px 0 10px 0; }
 .cw-karta { display:flex; align-items:center; gap:16px; padding:14px 18px; margin-bottom:10px;
-            border:1px solid #CFC2A6; border-radius:16px; box-shadow:0 4px 14px rgba(60,45,20,0.12);
-            background:radial-gradient(ellipse at 0% 50%, #8A6D3B1F 0%, transparent 60%), #F4ECDC;
+            border:1px solid var(--e-obram); border-radius:16px; box-shadow:0 4px 14px var(--e-cien_s);
+            background:radial-gradient(ellipse at 0% 50%, var(--e-glow_presetu) 0%, transparent 60%), var(--e-karta);
             animation:cw-wjazd 0.45s ease both; transition:transform 0.15s ease, box-shadow 0.15s ease; }
-.cw-karta:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(60,45,20,0.22); }
-.cw-dodatek { background:#EDE3CF; opacity:0.9; }
+.cw-karta:hover { transform:translateY(-2px); box-shadow:0 8px 20px var(--e-cien_h); }
+.cw-dodatek { background:var(--e-dodatek); opacity:0.9; }
 .cw-num { width:34px; height:34px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center;
-          font-weight:700; color:#F4ECDC; background:#1B1B1A; }
-.cw-dodatek .cw-num { background:#DCD0B8; color:#6B6355; }
+          font-weight:700; color:var(--e-dzis_tekst); background-color:var(--e-przycisk); background-image:var(--e-przycisk-grad); }
+.cw-dodatek .cw-num { background:var(--e-tlo_pier); background-image:none; color:var(--e-przyg); }
 .cw-tresc { flex:1; min-width:0; }
-.cw-nazwa { font-weight:600; font-size:1.02rem; color:#1B1B1A; }
-.cw-sub { color:#6B6355; font-size:0.82rem; margin-top:3px; }
-.cw-wsk { color:#7A5F2E; }
-.cw-ikona { margin-right:6px; color:#7A6A4F; }
-.cw-plakietka { background:#EFE3C9; border:1px solid #CFC2A6; border-radius:12px; padding:8px 14px;
-                font-weight:700; font-size:1.05rem; white-space:nowrap; color:#1B1B1A; }
+.cw-nazwa { font-weight:600; font-size:1.02rem; color:var(--e-tekst); }
+.cw-sub { color:var(--e-przyg); font-size:0.82rem; margin-top:3px; }
+.cw-wsk { color:var(--e-wsk); }
+.cw-ikona { margin-right:6px; color:var(--e-akcent); }
+.cw-plakietka { background:var(--e-plakietka); border:1px solid var(--e-obram); border-radius:12px; padding:8px 14px;
+                font-weight:700; font-size:1.05rem; white-space:nowrap; color:var(--e-tekst); }
 @media (max-width:640px) { .cw-karta { flex-wrap:wrap; } }
 @media (prefers-reduced-motion: reduce) { .cw-karta { animation:none; transition:none; } }
 </style>
@@ -115,4 +115,4 @@ def widok_presetu_html(nazwa: str, kategoria: str, typ: str, cel: str, cwiczenia
 
     sekcja("Główne ćwiczenia", glowne, dodatek=False)
     sekcja("Dodatki (opcjonalnie)", dodatki, dodatek=True)
-    return "".join(czesci)
+    return "".join(czesci)

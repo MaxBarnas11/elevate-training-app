@@ -12,6 +12,8 @@ __pycache__/
 # Baza danych z treningami (Twoje prywatne dane)
 *.db
 
-   # Pliki tymczasowe do podmiany (podmien.bat)
-   *_NOWA.py
-   
+# Pliki tymczasowe do podmiany (podmien.bat)
+*_NOWA.py
+
+# Nazwa tematu powiadomień ntfy (działa jak hasło)
+ntfy_temat.txt
