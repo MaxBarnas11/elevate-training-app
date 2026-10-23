@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tomllib
 from pathlib import Path
 
 import streamlit as st
@@ -47,13 +48,14 @@ def adresy(env: str, klucz_sekretu: str) -> set[str]:
 
 def logowanie_wymagane() -> bool:
     """Czy dostęp wymaga zalogowania. OVRLD_LOGOWANIE=1 wymusza (tak ustawiamy serwer), =0 wyłącza (praca lokalna),
-    a bez zmiennej logowanie jest wymagane, gdy w secrets.toml jest sekcja [auth]."""
+    a bez zmiennej logowanie jest wymagane, gdy w secrets.toml jest sekcja [auth] albo gdy ten plik jest uszkodzony."""
     tryb = os.environ.get("OVRLD_LOGOWANIE")
     if tryb == "1":
         return True
     if tryb == "0":
         return False
-    return auth_skonfigurowane()
+    # Uszkodzony secrets.toml nie może po cichu wyłączać logowania: wtedy aplikacja nikogo nie wpuszcza (fail closed).
+    return auth_skonfigurowane() or secrets_uszkodzone()
 
 
 def auth_skonfigurowane() -> bool:
@@ -61,6 +63,18 @@ def auth_skonfigurowane() -> bool:
         return "auth" in st.secrets
     except Exception:   # noqa: BLE001 (brak pliku secrets.toml)
         return False
+
+
+def secrets_uszkodzone() -> bool:
+    """True, gdy plik .streamlit/secrets.toml istnieje, ale nie da się go odczytać (błąd składni TOML)."""
+    plik = FOLDER_APLIKACJI / ".streamlit" / "secrets.toml"
+    if not plik.is_file():
+        return False
+    try:
+        tomllib.loads(plik.read_text(encoding="utf-8-sig"))
+        return False
+    except Exception:   # noqa: BLE001
+        return True
 
 
 def dozwolone() -> set[str]:

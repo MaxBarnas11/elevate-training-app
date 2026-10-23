@@ -50,7 +50,11 @@ def wymagaj_logowania() -> None:
         return
     if not uzytkownik.auth_skonfigurowane():
         _ekran("OVRLD", "Logowanie nie jest skonfigurowane")
-        st.error("Brakuje sekcji [auth] w pliku .streamlit/secrets.toml. Dopóki jej nie ma, aplikacja nikogo nie wpuszcza.")
+        if uzytkownik.secrets_uszkodzone():
+            st.error("Plik .streamlit/secrets.toml jest uszkodzony (błąd składni). Popraw go albo zmień jego nazwę na secrets.toml.off, "
+                     "żeby wrócić do pracy bez logowania. Dopóki tak jest, aplikacja nikogo nie wpuszcza.")
+        else:
+            st.error("Brakuje sekcji [auth] w pliku .streamlit/secrets.toml. Dopóki jej nie ma, aplikacja nikogo nie wpuszcza.")
         st.stop()
     u = st.user
     if not getattr(u, "is_logged_in", False):
