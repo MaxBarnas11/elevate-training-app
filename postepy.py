@@ -20,6 +20,7 @@ from karty import (
     KOLOR_KARTY, KOLOR_OBRAMOWANIA, KOLOR_PRZYGASZONY, KOLOR_TEKSTU, KOLOR_TLA_PIERSCIENIA,
     NIEBIESKI, POMARANCZOWY, ZIELONY, _naglowek_karty, _tlo_karty, siatka_kart,
 )
+from mapa_ciala import mapa_ciala_html
 from motywy import v as _kolor_motywu
 from regeneracja import karta_wykresu, siatka_wykresow, wykres_liniowy_svg
 from sesja_treningowa import JEDNOSTKI_POWTORZEN, format_kg, jednostka_powtorzen, lista_partii, opis_serii, pytajnik
@@ -135,6 +136,16 @@ def partie_cwiczen() -> dict[str, str]:
             return {}
 
 
+def wagi_partii_cwiczen() -> dict[str, dict[str, float]]:
+    """Nazwa ćwiczenia -> {partia: waga serii}: partia główna 1, każda dodatkowa 0,5 (np. wyciskanie leżąc: klatka 1, triceps 0,5)."""
+    from cwiczenia_meta import wagi_cwiczen
+    with closing(sqlite3.connect(baza.SCIEZKA_BAZY)) as db:
+        try:
+            return wagi_cwiczen(db)
+        except sqlite3.OperationalError:
+            return {}
+
+
 def przypisz_partie(nazwa: str, partia: str) -> None:
     """Zmienia partię ćwiczenia w bazie (dodaje je, jeśli go tam jeszcze nie ma)."""
     with closing(sqlite3.connect(baza.SCIEZKA_BAZY)) as db:
@@ -151,8 +162,14 @@ def _przypisz_z_formularza() -> None:
         s["post_partia_cwiczenie"] = None
 
 
-def serie_na_partie(wpisy: pd.DataFrame, partie: dict[str, str], dzis: date, ile_tygodni: int = 5) -> pd.DataFrame:
+def format_serii(n: float) -> str:
+    """Liczba serii z przecinkiem tylko dla połówek: 10 → „10”, 4,5 → „4,5”."""
+    return f"{round(float(n), 1):g}".replace(".", ",")
+
+
+def serie_na_partie(wpisy: pd.DataFrame, partie: dict, dzis: date, ile_tygodni: int = 5) -> pd.DataFrame:
     """Serie na partię mięśniową w kolejnych tygodniach (kolumny: poniedziałki, najstarszy pierwszy, ostatni to bieżący tydzień).
+    `partie`: nazwa ćwiczenia -> partia (liczy się 1 serię) albo {partia: waga} (główna 1, dodatkowe 0,5).
     Liczą się tylko ćwiczenia w powtórzeniach; rozgrzewki nie wchodzą, bo nie trafiają do wpisów ćwiczeń."""
     start = poczatek_tygodnia(dzis) - timedelta(weeks=ile_tygodni - 1)
     kolumny = [start + timedelta(weeks=i) for i in range(ile_tygodni)]
@@ -163,8 +180,13 @@ def serie_na_partie(wpisy: pd.DataFrame, partie: dict[str, str], dzis: date, ile
     w = w[w["Tydzien"] >= start]
     if w.empty:
         return pd.DataFrame(columns=kolumny)
-    w["Partia"] = w["Cwiczenie"].map(lambda n: partie.get(n, "Inne"))
-    tabela = w.pivot_table(index="Partia", columns="Tydzien", values="Serie", aggfunc="sum", fill_value=0)
+    wiersze = []
+    for r in w.itertuples():
+        wagi = partie.get(r.Cwiczenie, "Inne")
+        for partia, waga in (wagi if isinstance(wagi, dict) else {wagi: 1.0}).items():
+            wiersze.append((partia, r.Tydzien, float(r.Serie) * waga))
+    rozbite = pd.DataFrame(wiersze, columns=["Partia", "Tydzien", "Serie"])
+    tabela = rozbite.pivot_table(index="Partia", columns="Tydzien", values="Serie", aggfunc="sum", fill_value=0)
     return tabela.reindex(columns=kolumny, fill_value=0)
 
 
@@ -278,10 +300,20 @@ def slupki_svg(etykiety: list[str], wartosci: list[float], jednostka: str = "") 
     return ogranicz_wysokosc("".join(czesci), 220)
 
 
-def karta_rekordow(rek: pd.DataFrame, ile: int = 6) -> str:
+def swieze_rekordy(rek: pd.DataFrame, dzis: date) -> pd.DataFrame:
+    """Rekordy z ostatniej doby (trening dzisiejszy albo wczorajszy). Starsze znikają z karty, żeby lista nie rosła."""
+    if rek.empty:
+        return rek
+    return rek[rek["Data"] >= pd.Timestamp(dzis - timedelta(days=1))].reset_index(drop=True)
+
+
+def karta_rekordow(rek: pd.DataFrame, ile: int = 6, dzis: date | None = None) -> str:
+    """Karta nowych rekordów. Z podaną datą dzisiejszą pokazuje tylko rekordy z ostatniej doby (po 24 h znikają)."""
+    if dzis is not None:
+        rek = swieze_rekordy(rek, dzis)
     if rek.empty:
         tresc = (f'<div style="min-height:120px;display:flex;align-items:center;justify-content:center;text-align:center;'
-                 f'font-size:0.85rem;color:{KOLOR_PRZYGASZONY};">Rekordy pojawią się, gdy to samo ćwiczenie<br>zapiszesz z ciężarem w co najmniej dwóch treningach.</div>')
+                 f'font-size:0.85rem;color:{KOLOR_PRZYGASZONY};">Brak nowych rekordów z ostatniej doby.<br>Pojawią się po treningu, w którym pobijesz swój wynik.</div>')
     else:
         wiersze = []
         for _, r in rek.head(ile).iterrows():
@@ -297,7 +329,7 @@ def karta_rekordow(rek: pd.DataFrame, ile: int = 6) -> str:
         tresc = "".join(wiersze)
     return (
         f'<div style="{_tlo_karty(ZIELONY)}border:1px solid {KOLOR_OBRAMOWANIA};border-radius:16px;padding:16px 18px;box-sizing:border-box;min-width:0;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;">{_naglowek_karty("Ostatnie rekordy", ZIELONY)}'
+        f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;">{_naglowek_karty("Nowe rekordy", ZIELONY)}'
         f'<span style="font-size:0.72rem;color:{KOLOR_PRZYGASZONY};">szacowane 1RM</span></div>'
         f'<div style="margin-top:8px;">{tresc}</div></div>'
     )
@@ -324,12 +356,12 @@ def karta_partii(tabela: pd.DataFrame, znacznik: int = 10) -> str:
 
         wiersze = []
         for partia, r in dane.iterrows():
-            teraz, poprzedni = int(r["Teraz"]), int(r["Poprzedni"])
+            teraz, poprzedni = float(r["Teraz"]), float(r["Poprzedni"])
             wiersze.append(
                 f'<div style="padding:8px 0;border-bottom:1px solid {KOLOR_OBRAMOWANIA};">'
                 f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;">'
                 f'<span style="font-weight:600;color:{KOLOR_TEKSTU};">{html.escape(str(partia))}</span>'
-                f'<span style="font-weight:700;color:{KOLOR_TEKSTU};">{teraz}</span></div>'
+                f'<span style="font-weight:700;color:{KOLOR_TEKSTU};">{format_serii(teraz)}</span></div>'
                 f'<div style="position:relative;margin-top:6px;">'
                 f'{slupek(poprzedni, KOLOR_POPRZEDNI_TYDZIEN, 6)}<div style="height:3px;"></div>{slupek(teraz, ZIELONY, 8)}'
                 f'<div style="position:absolute;left:{100 * znacznik / maks:.1f}%;top:-3px;bottom:-3px;width:2px;background:{KOLOR_TEKSTU};opacity:0.5;"></div>'
@@ -348,6 +380,21 @@ def karta_partii(tabela: pd.DataFrame, znacznik: int = 10) -> str:
     return (
         f'<div style="{_tlo_karty(NIEBIESKI)}border:1px solid {KOLOR_OBRAMOWANIA};border-radius:16px;padding:16px 18px;box-sizing:border-box;min-width:0;">'
         f'{tytul}<div style="margin-top:8px;">{tresc}</div>{legenda}</div>'
+    )
+
+
+def karta_mapy(tabela: pd.DataFrame) -> str:
+    """Mapa ciała z serii bieżącego tygodnia (pon–ndz): ostatnia kolumna tabeli „Serie na partię”."""
+    tytul = _naglowek_karty("Mapa ciała: ten tydzień", NIEBIESKI)
+    serie = tabela.iloc[:, -1].to_dict() if tabela.shape[1] and len(tabela) else {}
+    if not any(float(n or 0) > 0 for n in serie.values()):
+        tresc = (f'<div style="min-height:80px;display:flex;align-items:center;justify-content:center;text-align:center;'
+                 f'font-size:0.85rem;color:{KOLOR_PRZYGASZONY};">Pojawi się, gdy w tym tygodniu zapiszesz trening z ćwiczeniami na powtórzenia.</div>')
+    else:
+        tresc = mapa_ciala_html(serie, KOLOR_TEKSTU, KOLOR_PRZYGASZONY, KOLOR_OBRAMOWANIA)
+    return (
+        f'<div style="{_tlo_karty(NIEBIESKI)}border:1px solid {KOLOR_OBRAMOWANIA};border-radius:16px;padding:16px 18px;box-sizing:border-box;min-width:0;">'
+        f'{tytul}<div style="margin-top:8px;">{tresc}</div></div>'
     )
 
 
@@ -391,14 +438,26 @@ def widok_postepow() -> None:
         slupki_svg([f"{t:%d.%m}" for t, _ in tyg], [w for _, w in tyg], jednostka),
         komunikat_pusty="Brak treningów w ostatnich 12 tygodniach.",
     )
-    st.markdown(siatka_postepow([wykres, karta_rekordow(rek)]), unsafe_allow_html=True)
-    pytajnik("Tydzień po tygodniu: ostatnie 12 tygodni, ciemny słupek to bieżący tydzień.")
+    st.markdown(siatka_postepow([wykres, karta_rekordow(rek, dzis=dzis)]), unsafe_allow_html=True)
+    pytajnik("Tydzień po tygodniu: ostatnie 12 tygodni, ciemny słupek to bieżący tydzień. "
+             "Nowe rekordy: z dzisiejszego i wczorajszego treningu, potem znikają (licznik „Rekordy” wyżej liczy 30 dni).")
 
     # --- serie na partię mięśniową ---
-    st.markdown(siatka_postepow([karta_partii(serie_na_partie(wpisy, partie_cwiczen(), dzis))], kolumny=1), unsafe_allow_html=True)
-    pytajnik("Serie na partię: tylko serie robocze w ćwiczeniach liczonych w powtórzeniach (rozgrzewki i cardio nie wchodzą), "
-             "a ćwiczenie liczy się do jednej, przypisanej partii. Zwykle podaje się 10–20 serii tygodniowo na partię jako punkt "
-             "odniesienia dla przyrostu mięśni. To orientacja, nie norma.")
+    tabela_partii = serie_na_partie(wpisy, wagi_partii_cwiczen(), dzis)
+    # Dwie karty obok siebie (na telefonie jedna pod drugą), każda ze swoim znaczkiem „?” zaraz pod sobą
+    kol_partie, kol_mapa = st.columns(2)
+    with kol_partie:
+        st.markdown(siatka_postepow([karta_partii(tabela_partii)], kolumny=1), unsafe_allow_html=True)
+        pytajnik("Serie na partię: tylko serie robocze w ćwiczeniach liczonych w powtórzeniach (rozgrzewki i cardio nie wchodzą). "
+                 "Seria liczy się za 1 do partii głównej ćwiczenia i za 0,5 do każdej partii dodatkowej (np. wyciskanie leżąc: klatka 1, "
+                 "triceps i barki przód po 0,5). Zwykle podaje się 10–20 serii tygodniowo na partię jako punkt "
+                 "odniesienia dla przyrostu mięśni. To orientacja, nie norma.")
+    with kol_mapa:
+        st.markdown(siatka_postepow([karta_mapy(tabela_partii)], kolumny=1), unsafe_allow_html=True)
+        pytajnik("Mapa ciała: kolor to liczba serii partii w bieżącym tygodniu (poniedziałek–niedziela). Skala: brak, mało 1–4, ok 5–9, "
+                 "idealnie 10–16, dużo 17–20, bardzo dużo 21–25, ponad zakres 26 i więcej. To orientacja, nie diagnoza: "
+                 "„ponad zakres” nie znaczy przetrenowania. Plecy mają trzy części (szerokie, górne, dolne), a barki trzy (przód, bok, tył). "
+                 "Cardio i plyometria są poza mapą.")
     partie = partie_cwiczen()
     bez_partii = sorted(n for n in wpisy["Cwiczenie"].unique() if partie.get(n, "Inne") == "Inne"
                         and jednostka_powtorzen(wpisy.loc[wpisy["Cwiczenie"] == n, "Jednostka"].iloc[0]))

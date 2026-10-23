@@ -1,12 +1,33 @@
 @echo off
-rem Uruchamia aplikacje tak, zeby byla widoczna z telefonu (ta sama siec Wi-Fi albo Tailscale).
+rem Uruchamia aplikacje tak, zeby byla widoczna z telefonu przez Tailscale (adres zaczyna sie od 100.).
+rem Bez Tailscale aplikacja nasluchuje tylko na tym komputerze (127.0.0.1), a nie w calej sieci Wi-Fi: nie ma logowania,
+rem wiec nie moze byc dostepna dla kazdego w domu, na silowni czy w hotelu.
+rem Parametry (w dowolnej kolejnosci): "cicho" = bez otwierania przegladarki (tak robi AKTUALIZUJ.bat),
+rem "siec" = awaryjnie nasluchuj w calej sieci Wi-Fi (jak dawniej; tylko w zaufanej sieci).
 cd /d "%~dp0"
-title ELEVATE-START
+title OVRLD-START
 call venv\Scripts\activate
+
+set "TS="
+for /f "usebackq delims=" %%i in (`tailscale ip -4 2^>nul`) do if not defined TS set "TS=%%i"
+if not defined TS if exist "%ProgramFiles%\Tailscale\tailscale.exe" for /f "usebackq delims=" %%i in (`"%ProgramFiles%\Tailscale\tailscale.exe" ip -4 2^>nul`) do if not defined TS set "TS=%%i"
+if defined TS if not "%TS:~0,4%"=="100." set "TS="
+
+if not defined STREAMLIT_SERVER_PORT set "STREAMLIT_SERVER_PORT=8501"
+set "ADRES=127.0.0.1"
+if defined TS set "ADRES=%TS%"
+if /i "%~1"=="siec" set "ADRES=0.0.0.0"
+if /i "%~2"=="siec" set "ADRES=0.0.0.0"
+
 echo.
-echo ===== Adresy tego komputera (szukaj IPv4; Tailscale zaczyna sie od 100.) =====
-ipconfig | findstr /i "IPv4"
-echo ===== Na telefonie wpisz: http://ADRES:8501 =====
+if "%ADRES%"=="0.0.0.0" echo ===== TRYB "siec": aplikacja dostepna w calej sieci tego komputera, bez logowania! =====
+if "%ADRES%"=="127.0.0.1" echo ===== UWAGA: Tailscale nie dziala, aplikacja jest tylko na tym komputerze. Wlacz Tailscale i uruchom ponownie. =====
+if defined TS echo ===== Na telefonie wpisz: http://%TS%:%STREAMLIT_SERVER_PORT% =====
 echo.
-streamlit run app.py --server.address 0.0.0.0
-pause
+
+set "OPCJE=--server.address %ADRES%"
+if /i "%~1"=="cicho" set "OPCJE=%OPCJE% --server.headless true"
+if /i "%~2"=="cicho" set "OPCJE=%OPCJE% --server.headless true"
+streamlit run app.py %OPCJE%
+rem Okno zostaje tylko wtedy, gdy aplikacja zakonczyla sie bledem (zeby dalo sie go przeczytac)
+if errorlevel 1 pause

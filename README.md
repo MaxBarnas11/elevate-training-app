@@ -1,4 +1,4 @@
-# ELEVATE
+# OVRLD
 
 Polska aplikacja treningowa, której używam na co dzień na siłowni, głównie z iPhone'a. Łączy prowadzenie treningu seria po serii (z odliczaniem przerw) z danymi o regeneracji z zegarka Garmin, a historię i postępy trzyma w lokalnej bazie SQLite.
 

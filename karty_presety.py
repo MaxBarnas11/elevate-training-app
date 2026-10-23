@@ -86,16 +86,12 @@ def widok_presetu_html(nazwa: str, kategoria: str, typ: str, cel: str, cwiczenia
     glowne = cwiczenia[cwiczenia["Rola"] != "Dodatek"]
     dodatki = cwiczenia[cwiczenia["Rola"] == "Dodatek"]
 
-    tagi = f'<span>{e(str(kategoria))}</span>'
-    if str(typ) != str(kategoria):          # żeby nie powtarzać np. "Cardio" dwa razy
-        tagi += f'<span>{e(str(typ))}</span>'
-    tagi += f'<span>{len(glowne)} głównych' + (f' + {len(dodatki)} dod.' if len(dodatki) else '') + '</span>'
+    # Bez dodatkowych pigułek z kategorią i typem (to już jest w nazwie) i bez szarego opisu: zostaje tylko liczba ćwiczeń
+    tagi = f'<span>{len(glowne)} głównych' + (f' + {len(dodatki)} dod.' if len(dodatki) else '') + '</span>'
     czesci = [
         KARTY_CWICZEN_CSS,
         f'<div class="cw-top"><div class="cw-tytul">{e(nazwa)}</div><div class="cw-tagi">{tagi}</div></div>',
     ]
-    if cel:
-        czesci.append(f'<div class="cw-cel">{e(cel)}</div>')
 
     licznik = 0
 
@@ -115,4 +111,4 @@ def widok_presetu_html(nazwa: str, kategoria: str, typ: str, cel: str, cwiczenia
 
     sekcja("Główne ćwiczenia", glowne, dodatek=False)
     sekcja("Dodatki (opcjonalnie)", dodatki, dodatek=True)
-    return "".join(czesci)
+    return "".join(czesci)

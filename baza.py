@@ -1,6 +1,7 @@
 """Wszystkie funkcje do pracy z bazą SQLite (treningi.db)."""
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import closing
 from datetime import datetime
@@ -8,8 +9,49 @@ from pathlib import Path
 
 import pandas as pd
 
-# Plik bazy leży obok tego pliku, niezależnie od tego, skąd uruchomisz aplikację
-SCIEZKA_BAZY = Path(__file__).parent / "treningi.db"
+import uzytkownik
+
+# Plik bazy leży obok tego pliku, niezależnie od tego, skąd uruchomisz aplikację.
+# Zmienna OVRLD_BAZA (pełna ścieżka do pliku .db) uruchamia osobną instancję z własnymi, pustymi danymi (konto gościa, GOSC.bat).
+TRYB_GOSCIA = bool(os.environ.get("OVRLD_BAZA"))
+
+
+class _SciezkaBazy(os.PathLike):
+    """Ścieżka do bazy bieżącego użytkownika. Wygląda jak Path (sqlite3.connect, .parent, .exists() itd.), ale przy każdym użyciu
+    pyta moduł uzytkownik, czyja to sesja, więc wiele osób naraz nigdy nie dzieli jednego pliku."""
+
+    def _p(self) -> Path:
+        return uzytkownik.sciezka_bazy()
+
+    def __fspath__(self) -> str:
+        return str(self._p())
+
+    __str__ = __fspath__
+
+    def __repr__(self) -> str:
+        return f"SciezkaBazy({self.__fspath__()!r})"
+
+    def __getattr__(self, nazwa: str):
+        return getattr(self._p(), nazwa)
+
+    def __truediv__(self, inny):
+        return self._p() / inny
+
+    def __eq__(self, inny) -> bool:
+        try:
+            return self._p() == Path(inny)
+        except TypeError:
+            return False
+
+    def __hash__(self) -> int:
+        return hash(self._p())
+
+
+if TRYB_GOSCIA:
+    SCIEZKA_BAZY = Path(os.environ["OVRLD_BAZA"])
+    SCIEZKA_BAZY.parent.mkdir(parents=True, exist_ok=True)
+else:
+    SCIEZKA_BAZY = _SciezkaBazy()
 
 # Nowe kolumny w tabeli treningi (nazwa -> typ w SQLite)
 NOWE_KOLUMNY = {

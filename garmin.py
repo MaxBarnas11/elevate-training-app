@@ -2,18 +2,80 @@
 from __future__ import annotations
 
 import os
-from datetime import date, timedelta
+import time
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import streamlit as st
 from garminconnect import Garmin
 
+import baza
+import uzytkownik
 from baza import zapisane_dni_garmin, zapisz_dzien_garmin
+from garminconnect import GarminConnectConnectionError
+
+# Zapamiętane tokeny logowania: po pierwszym udanym logowaniu hasło nie jest już wysyłane, tylko odświeżany token.
+# Ciągłe logowanie hasłem (każde odświeżenie, każdy restart) kończy się blokadą Cloudflare po stronie Garmina.
+SCIEZKA_TOKENOW = baza.SCIEZKA_BAZY.parent / ".garmin_tokeny" if baza.TRYB_GOSCIA else Path(__file__).parent / ".garmin_tokeny"
+# Po nieudanym logowaniu przez tyle minut nie próbujemy ponownie (kolejne próby tylko przedłużają blokadę)
+PRZERWA_PO_BLEDZIE_MIN = 60
+PLIK_BLOKADY = baza.SCIEZKA_BAZY.parent / ".garmin_blokada" if baza.TRYB_GOSCIA else Path(__file__).parent / ".garmin_blokada"
+
+
+def _sprawdz_blokade() -> None:
+    """Zgłasza czytelny błąd, gdy ostatnie logowanie się nie udało i przerwa jeszcze trwa."""
+    try:
+        do = float(PLIK_BLOKADY.read_text().strip())
+    except (OSError, ValueError):
+        return
+    if time.time() < do:
+        godzina = datetime.fromtimestamp(do).strftime("%H:%M")
+        raise GarminConnectConnectionError(
+            f"logowanie jest wstrzymane do {godzina}, bo ostatnia próba została zablokowana (zabezpieczenie Cloudflare). "
+            f"Kolejne próby tylko przedłużają blokadę. Dane z poprzednich dni są w bazie. "
+            f"Żeby spróbować od razu, usuń plik .garmin_blokada w folderze aplikacji."
+        )
+
+
+def _ustaw_blokade() -> None:
+    try:
+        PLIK_BLOKADY.write_text(str(time.time() + PRZERWA_PO_BLEDZIE_MIN * 60))
+    except OSError:
+        pass
+
+
+def _zdejmij_blokade() -> None:
+    try:
+        PLIK_BLOKADY.unlink()
+    except OSError:
+        pass
 
 # Ile dni wstecz uzupełniać z Garmina (gdy jeszcze ich nie mamy w bazie)
 LICZBA_DNI_WSTECZ = 14
 
 # Ile brakujących dni dociągamy przy jednym odświeżeniu (żeby nie zasypać Garmina zapytaniami)
 MAKS_DOCIAGNIEC_NA_RAZ = 5
+
+
+def ostatnie_zapisane_dane() -> dict | None:
+    """Ostatni dzień z danymi zapisany w bazie (gdy Garmin chwilowo nie odpowiada): {'data': 'RRRR-MM-DD', 'dane': {...}}.
+    Klucze w 'dane' jak z pobierz_jeden_dzien, żeby interfejs mógł je pokazać bez zmian."""
+    from contextlib import closing
+    import sqlite3
+    try:
+        with closing(sqlite3.connect(baza.SCIEZKA_BAZY)) as db:
+            w = db.execute(
+                "SELECT Data, Wynik_snu, Czas_snu, RHR, HRV, Kroki, Cel_krokow, Kcal_aktywne, Kcal_spoczynkowe, Stres "
+                "FROM garmin_dziennie WHERE Wynik_snu IS NOT NULL OR RHR IS NOT NULL ORDER BY Data DESC LIMIT 1"
+            ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not w:
+        return None
+    return {"data": w[0], "dane": {
+        "wynik_snu": w[1], "czas_snu": w[2] * 60 if w[2] is not None else None, "rhr": w[3], "hrv": w[4],
+        "kroki": w[5], "cel_krokow": w[6], "kcal_aktywne": w[7], "kcal_spoczynkowe": w[8], "stres": w[9],
+    }}
 
 
 def formatuj_czas(sekundy: int | None) -> str:
@@ -70,13 +132,21 @@ def pobierz_jeden_dzien(garmin: Garmin, dzien: str) -> dict:
 @st.cache_data(ttl=900, show_spinner=False)
 def synchronizuj_garmin(dzisiaj: str) -> dict:
     """Zwraca dzisiejsze dane z Garmina i uzupełnia bazę o brakujące dni."""
+    if baza.TRYB_GOSCIA or not uzytkownik.czy_wlasciciel():   # dane logowania do Garmina z .env należą tylko do właściciela
+        raise ValueError("Garmin jest dostępny tylko na koncie właściciela")
     email = os.getenv("GARMIN_EMAIL")
     haslo = os.getenv("GARMIN_PASSWORD")
     if not email or not haslo:
         raise ValueError("Brak GARMIN_EMAIL lub GARMIN_PASSWORD w pliku .env")
 
+    _sprawdz_blokade()
     garmin = Garmin(email, haslo)
-    garmin.login()
+    try:
+        garmin.login(str(SCIEZKA_TOKENOW))   # z zapamiętanych tokenów, a hasło tylko gdy ich nie ma
+    except Exception:
+        _ustaw_blokade()
+        raise
+    _zdejmij_blokade()
 
     # Dzisiejszy dzień: błąd tutaj trafia do komunikatów w aplikacji
     dane_dzis = pobierz_jeden_dzien(garmin, dzisiaj)

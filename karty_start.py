@@ -1,6 +1,8 @@
 """Nowe kafelki na stronie Start: kroki, kalorie, stres, fazy snu i tydzień treningowy."""
 from __future__ import annotations
 
+import html
+
 from motywy import kolor_typu
 from karty import (
     KOLOR_OBRAMOWANIA, KOLOR_TLA_PIERSCIENIA, KOLOR_TEKSTU, KOLOR_PRZYGASZONY, KOLOR_KARTY,
@@ -260,7 +262,7 @@ def karta_tydzien(podsumowanie: dict) -> str:
             kropka = f'<div style="width:30px;height:30px;border-radius:50%;border:2px solid {kolor_dnia};"></div>'
         else:                                         # dzień wolny: mała kropka
             kropka = f'<div style="width:8px;height:8px;border-radius:50%;background:{KOLOR_TLA_PIERSCIENIA};"></div>'
-        podpis = (d["typ"] or "trening") if (d["planowany"] or d["zrobiony"]) else "wolne"
+        podpis = html.escape(d["typ"] or "trening") if (d["planowany"] or d["zrobiony"]) else "wolne"   # nazwa presetu wpisana przez użytkownika
         kolumny.append(
             f'<div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:6px;">'
             f'<div style="font-size:0.8rem;font-weight:{700 if d["dzis"] else 400};'

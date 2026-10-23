@@ -10,6 +10,7 @@ from datetime import datetime
 
 import baza
 import powiadomienia
+import uzytkownik
 
 MAKS_DLUGOSC = 2000
 
@@ -36,7 +37,10 @@ def zapisz(tresc: str, strona: str = "", teraz: datetime | None = None) -> tuple
         db.commit()
         nr = cur.lastrowid
     try:
-        wyslano = bool(powiadomienia.wyslij(f"Uwaga: {strona}" if strona else "Uwaga do aplikacji", tresc, priorytet=3, tag="memo"))
+        tytul = f"Uwaga: {strona}" if strona else "Uwaga do aplikacji"
+        if not uzytkownik.czy_wlasciciel():   # uwaga od znajomego: właściciel widzi, kto ją wysłał
+            tytul += f" ({uzytkownik.email() or 'gość'})"
+        wyslano = bool(powiadomienia.wyslij(tytul, tresc, priorytet=3, tag="memo"))
     except Exception:
         wyslano = False
     if wyslano:

@@ -1,6 +1,13 @@
 [server]
 # Pliki z folderu static (ikona na ekran początkowy iPhone'a) dostępne pod adresem /app/static/...
 enableStaticServing = true
+# Ochrona przed podszywaniem sie pod uzytkownika przez obca strone (CSRF) i przed obcymi domenami (CORS); to domyslne ustawienia, jawnie dla pewnosci
+enableXsrfProtection = true
+enableCORS = true
+
+[browser]
+# Bez wysylania statystyk uzycia do Streamlita
+gatherUsageStats = false
 
 [theme]
 font = "sans serif"

@@ -3,3 +3,4 @@ pandas
 altair
 python-dotenv
 garminconnect
+Authlib>=1.3.2

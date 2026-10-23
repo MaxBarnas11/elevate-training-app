@@ -9,19 +9,23 @@ Część "logika" (na górze) nie używa Streamlita i da się ją testować osob
 """
 from __future__ import annotations
 
+import re
+import zlib
 import html
 import json
 import math
 import sqlite3
 from contextlib import closing
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import streamlit as st
 
 import baza
+import baza_cwiczen
 import powiadomienia
+import profil
 from karty import (
     KOLOR_KARTY, KOLOR_OBRAMOWANIA, KOLOR_PRZYGASZONY, KOLOR_TEKSTU, KOLOR_TLA_PIERSCIENIA,
     CZERWONY, NIEBIESKI, POMARANCZOWY, ZIELONY,
@@ -40,7 +44,7 @@ PRZERWA_GLOWNE = 120                     # sekundy przerwy po ćwiczeniu główn
 PRZERWA_DODATEK = 60                     # sekundy przerwy po dodatku i ćwiczeniach na czas/dystans
 PRZERWA_ROZGRZEWKA = 60                  # sekundy przerwy po serii rozgrzewkowej
 SCHEMAT_ROZGRZEWKI = ((0.5, 5), (0.7, 3), (0.85, 1))   # (część ciężaru roboczego, powtórzenia)
-OPCJE_PRZERWY = {"Auto": None, "60 s": 60, "90 s": 90, "2 min": 120, "3 min": 180, "Wył.": 0}
+OPCJE_PRZERWY = {"60 s": 60, "90 s": 90, "2 min": 120, "3 min": 180, "Auto": None, "Wył.": 0}   # kolejność = układ przycisków: cztery czasy, niżej duże Auto i Wył.
 OPCJE_RPE = list(range(1, 11))
 
 
@@ -98,7 +102,7 @@ def przygotuj_tabele() -> None:
         for tabela, nowe in (("sesje", {"Czas_min": "INTEGER", "Preset": "TEXT"}),
                              ("wpisy_cwiczen", {"Jednostka": "TEXT"}),
                              ("serie_wykonane", {"Rozgrzewka": "INTEGER"}),
-                             ("cwiczenia", {"Notatka": "TEXT"})):
+                             ("cwiczenia", {"Notatka": "TEXT", "Typ": "TEXT"})):
             istniejace = {w[1] for w in db.execute(f"PRAGMA table_info({tabela})")}
             if not istniejace:
                 continue   # tabela powstanie w baza.przygotuj_baze()
@@ -113,6 +117,11 @@ def przygotuj_tabele() -> None:
             if db.execute("SELECT 1 FROM sqlite_master WHERE name = 'cwiczenia'").fetchone():
                 db.execute("UPDATE cwiczenia SET Partia = 'Cardio' WHERE Nazwa = 'Bieganie na bieżni' AND Partia = 'Inne'")
             db.execute("INSERT OR REPLACE INTO ustawienia (Klucz, Wartosc) VALUES ('migracja_bieganie_min', '1')")
+        # Dokładniejsze partie nóg (czworogłowe, dwugłowe, pośladki, łydki) i typ ćwiczenia (wielostawowe/izolowane)
+        from cwiczenia_meta import migruj
+        migruj(db)
+        # Duża baza ćwiczeń: kolumny, aliasy i jednorazowy import (z kopią bazy przed importem)
+        baza_cwiczen.przygotuj(db, Path(baza.SCIEZKA_BAZY))
         db.commit()
     _przygotowane.add(sciezka)
 
@@ -413,8 +422,14 @@ def jednostka_domyslna(nazwa: str) -> str:
     try:
         with closing(_polacz()) as db:
             w = db.execute("SELECT Partia FROM cwiczenia WHERE Nazwa = ?", (nazwa,)).fetchone()
+            try:
+                z_bazy = db.execute("SELECT Jednostka_dom FROM cwiczenia WHERE Nazwa = ?", (nazwa,)).fetchone()
+            except sqlite3.OperationalError:
+                z_bazy = None
     except sqlite3.OperationalError:
-        w = None
+        w, z_bazy = None, None
+    if z_bazy and z_bazy[0]:
+        return z_bazy[0]
     return "min" if w and w[0] == "Cardio" else "powt."
 
 
@@ -623,7 +638,8 @@ def pasujace_presety(lista: pd.DataFrame, typ: str) -> tuple[pd.DataFrame, str]:
     if not dokladne.empty:
         return dokladne, "dokladne"
     kategoria = typ.split()[0].lower()
-    podobne = lista[lista["Kategoria"].fillna("").str.lower() == kategoria]
+    pierwsze = lambda kol: lista[kol].fillna("").str.lower().str.startswith(kategoria)
+    podobne = lista[pierwsze("Kategoria") | pierwsze("Typ")]   # sport ma kategorię dyscypliny, ale rodzaj „Sport …”
     return (podobne, "kategoria") if not podobne.empty else (lista.iloc[0:0], "brak")
 
 
@@ -635,7 +651,16 @@ def preset_z_etykiety(lista: pd.DataFrame, etykieta: str | None) -> str | None:
     if etykieta in set(lista["Nazwa"]):
         return etykieta
     po_rodzaju = lista[lista["Typ"] == etykieta]
-    return str(po_rodzaju.iloc[0]["Nazwa"]) if not po_rodzaju.empty else None
+    if not po_rodzaju.empty:
+        return str(po_rodzaju.iloc[0]["Nazwa"])
+    # Stara etykieta z planu (np. „Góra Full”) nie zawsze jest nazwą ani rodzajem: dopasowujemy po słowach,
+    # ale tylko gdy pasuje dokładnie jeden preset (inaczej wolimy nie zgadywać)
+    slowa = set(re.findall(r"\w+", etykieta.lower()))
+    if not slowa:
+        return None
+    pasujace = [str(w["Nazwa"]) for _, w in lista.iterrows()
+                if slowa <= set(re.findall(r"\w+", f"{w['Nazwa']} {w['Typ'] or ''}".lower()))]
+    return pasujace[0] if len(pasujace) == 1 else None
 
 
 def ostatnia_etykieta_treningu() -> str | None:
@@ -651,7 +676,31 @@ def ostatnia_etykieta_treningu() -> str | None:
 
 def domyslny_preset(lista: pd.DataFrame, typ_planu: str | None = None) -> str | None:
     """Który preset ma być zaznaczony na starcie: z dzisiejszego planu, a gdy plan go nie wskazuje, ten ostatnio robiony."""
-    return preset_z_etykiety(lista, typ_planu) or preset_z_etykiety(lista, ostatnia_etykieta_treningu())
+    if typ_planu:   # plan wskazuje trening: nie podstawiamy innego (np. ostatnio robionego), gdy etykiety nie rozpoznano
+        return preset_z_etykiety(lista, typ_planu)
+    return preset_z_etykiety(lista, ostatnia_etykieta_treningu())
+
+
+def polecany_preset(lista: pd.DataFrame, typ_planu: str | None) -> str | None:
+    """Preset zaznaczony na starcie w zakładce Treningi: ten z dzisiejszej rekomendacji (to samo, co pozycja „Na dziś” w menu).
+    Rekomendacja liczy się od planu albo ostatnio robionego treningu. Bez rekomendacji zostaje preset z planu, a gdy i planu
+    nie ma, None: użytkownik wybiera sam, żeby nie myślał, że trening jest już dobrany."""
+    plan = preset_z_etykiety(lista, typ_planu)
+    baza = plan or (None if typ_planu else preset_z_etykiety(lista, ostatnia_etykieta_treningu()))
+    if not baza:
+        return None
+    try:
+        from rekomendacje import rekomendacje_na_dzis, trening_dzis_zapisany
+        if trening_dzis_zapisany(date.today()):
+            return plan
+        rek = rekomendacje_na_dzis(date.today(), baza)
+    except Exception:
+        return plan
+    if rek["partie"] and rek["partie"]["propozycja"]:
+        return rek["partie"]["propozycja"]
+    if rek["regeneracja"] or rek["partie"]:
+        return baza   # jest rekomendacja (np. lżejszy trening), a jej karta pokazuje się dopiero przy wybranym presecie
+    return plan
 
 
 # --- zapis gotowego treningu ----------------------------------------------
@@ -877,8 +926,11 @@ def lista_partii() -> list[str]:
 
 def dopisz_cwiczenie_do_bazy(nazwa: str, partia: str | None = None) -> None:
     """Nowe ćwiczenie trafia do bazy ćwiczeń z wybraną partią (domyślnie „Inne”). Istniejącego nie zmienia."""
+    przygotuj_tabele()
     with closing(_polacz()) as db:
-        db.execute("INSERT OR IGNORE INTO cwiczenia (Nazwa, Partia) VALUES (?, ?)", (nazwa, partia or "Inne"))
+        from cwiczenia_meta import typ_cwiczenia
+        db.execute("INSERT OR IGNORE INTO cwiczenia (Nazwa, Partia, Typ) VALUES (?, ?, ?)",
+                   (nazwa, partia or "Inne", typ_cwiczenia(nazwa, partia or "Inne")))
         db.commit()
 
 
@@ -1309,12 +1361,28 @@ def _uruchom(stan: dict) -> None:
     zapisz_stan(stan)
 
 
+def _lzejsze_jesli_wybrano(cwiczenia: list[dict]) -> list[dict]:
+    """Gdy użytkownik zaznaczył „Lżejszy trening” (rekomendacja na ekranie startu), ćwiczenia dostają o ok. 20% mniej serii."""
+    s = st.session_state
+    if not s.get("start_lzejszy"):
+        return cwiczenia
+    s["start_lzejszy"] = False
+    from rekomendacje import lzejsze_serie
+    for c in cwiczenia:
+        c["serie_plan"] = lzejsze_serie(c.get("serie_plan")) or c.get("serie_plan")
+    return cwiczenia
+
+
+def _wybierz_preset(nazwa: str) -> None:
+    st.session_state["start_preset"] = nazwa
+
+
 def rozpocznij_z_presetu(preset_id: int) -> None:
     """Przycisk 'Rozpocznij': ładuje ćwiczenia presetu i uruchamia prowadzony trening."""
     from presety import lista_presetow, wczytaj_cwiczenia_presetu
     lista = lista_presetow()
     wiersz = lista[lista["id"] == preset_id].iloc[0]
-    cwiczenia = cwiczenia_z_presetu(wczytaj_cwiczenia_presetu(preset_id))
+    cwiczenia = _lzejsze_jesli_wybrano(cwiczenia_z_presetu(wczytaj_cwiczenia_presetu(preset_id)))
     # rodzaj treningu to po prostu nazwa presetu: jedna rzecz do wyboru
     _uruchom(nowy_stan(str(wiersz["Nazwa"]), str(wiersz["Nazwa"]), cwiczenia, preset_id))
 
@@ -1322,7 +1390,7 @@ def rozpocznij_z_presetu(preset_id: int) -> None:
 def rozpocznij_z_ostatniego(typ: str, zapas: str = "") -> None:
     """Start na podstawie ostatniego treningu z tego presetu (te same ćwiczenia, serie i zakresy)."""
     ostatni = ostatni_trening_rodzaju(typ, zapas)
-    _uruchom(nowy_stan(f"{typ} (jak ostatnio)", typ, ostatni["cwiczenia"] if ostatni else []))
+    _uruchom(nowy_stan(f"{typ} (jak ostatnio)", typ, _lzejsze_jesli_wybrano(ostatni["cwiczenia"] if ostatni else [])))
 
 
 def rozpocznij_pusty(typ: str = "") -> None:
@@ -1489,19 +1557,20 @@ def _odczytaj_cel(prefiks: str) -> tuple[int | None, int | None, int | None]:
 
 def _wyczysc_cel(prefiks: str) -> None:
     for pole in ("serie", "od", "do"):
-        st.session_state[f"{prefiks}_{pole}"] = None
+        st.session_state[f"{prefiks}_{pole}"] = 0
 
 
 def _pola_celu(prefiks: str) -> None:
-    """Cel nowego ćwiczenia: liczba serii i zakres na serię (powtórzenia, sekundy, minuty lub metry zależnie od jednostki)."""
+    """Cel nowego ćwiczenia: liczba serii i zakres na serię (powtórzenia, sekundy, minuty lub metry zależnie od jednostki).
+    0 oznacza „brak” (pole z 0 zamiast pustego, bo w pustym polu Streamlita przyciski + i − nie działają)."""
     st.markdown("**Cel (opcjonalnie)**")
-    st.number_input("Liczba serii", min_value=1, max_value=20, step=1, value=None, placeholder="Auto", key=f"{prefiks}_serie",
-                    help="Puste: zostaje liczba serii z planu (dla minut: 1 seria).")
+    st.number_input("Liczba serii (0 = auto)", min_value=0, max_value=20, step=1, value=0, key=f"{prefiks}_serie",
+                    help="0: zostaje liczba serii z planu (dla minut: 1 seria).")
     k1, k2 = st.columns(2)
-    k1.number_input("Cel na serię: od", min_value=1, max_value=10000, step=1, value=None, placeholder="bez celu", key=f"{prefiks}_od",
-                    help="W wybranej jednostce: powtórzenia, sekundy, minuty albo metry. Np. 30 min albo 8 powtórzeń.")
-    k2.number_input("do (zakres)", min_value=1, max_value=10000, step=1, value=None, placeholder="opcjonalnie", key=f"{prefiks}_do",
-                    help="Tylko gdy cel to zakres, np. 8–12 powtórzeń.")
+    k1.number_input("Cel na serię: od (0 = brak)", min_value=0, max_value=10000, step=1, value=0, key=f"{prefiks}_od",
+                    help="W wybranej jednostce: powtórzenia, sekundy, minuty albo metry. Np. 30 min albo 8 powtórzeń. 0: bez celu.")
+    k2.number_input("do (0 = brak)", min_value=0, max_value=10000, step=1, value=0, key=f"{prefiks}_do",
+                    help="Tylko gdy cel to zakres, np. 8–12 powtórzeń. 0: bez zakresu.")
 
 
 def _dodaj_cwiczenie() -> None:
@@ -1519,7 +1588,8 @@ def _dodaj_cwiczenie() -> None:
     c["propozycja"] = zaproponuj(c)
     dolacz_cwiczenie(stan, c)
     _wyczysc_pola()
-    s["sesja_dodaj_wybor"], s["sesja_dodaj_nowe"], s["sesja_dodaj_jednostka"] = None, "", "Automatycznie"
+    s["sesja_dodaj_nowe"], s["sesja_dodaj_jednostka"] = "", "Automatycznie"
+    _wyczysc_wybor("sesja_dodaj")
     s["sesja_dodaj_partia"] = "Inne"
     _wyczysc_cel("sesja_dodaj")
     zapisz_stan(stan)
@@ -1540,7 +1610,8 @@ def _zamien_cwiczenie() -> None:
     ustaw_cel(stan["cwiczenia"][nr], *_odczytaj_cel("sesja_zam"))
     stan["cwiczenia"][nr]["propozycja"] = zaproponuj(stan["cwiczenia"][nr])
     _wyczysc_pola()
-    s["sesja_zam_wybor"], s["sesja_zam_nowe"], s["sesja_zam_jednostka"] = None, "", "Automatycznie"
+    s["sesja_zam_nowe"], s["sesja_zam_jednostka"] = "", "Automatycznie"
+    _wyczysc_wybor("sesja_zam")
     s["sesja_zam_partia"] = "Inne"
     _wyczysc_cel("sesja_zam")
     s["sesja_zam_zamknij"] = True   # okno zamknie się przy następnym przebiegu (patrz _okno_zamiany)
@@ -1749,6 +1820,103 @@ def _przygotuj_pola(c: dict, nr: int) -> None:
         s[f"sesja_nota_{nr}"] = wczytaj_notatke(c["nazwa"])
 
 
+def _wszystkie_cwiczenia_bazy() -> list[dict]:
+    try:
+        with closing(_polacz()) as db:
+            return baza_cwiczen.wszystkie(db)
+    except sqlite3.Error:
+        return []
+
+
+def _nazwy_widoczne() -> list[str]:
+    """Nazwy ćwiczeń do prostych list (bez ukrytych zaawansowanych); jak zawodzi baza, stara lista."""
+    lista = [c["nazwa"] for c in _wszystkie_cwiczenia_bazy() if not c["ukryte"]]
+    return lista or baza.lista_cwiczen()
+
+
+def _wybor_z_bazy(prefiks: str) -> None:
+    """Wybór ćwiczenia z bazy: kategoria, wyszukiwarka (po polsku i angielsku) oraz filtry partii i sprzętu.
+    Wynik trafia do st.session_state[f"{prefiks}_wybor"]. Gdyby filtry zawiodły, zostaje zwykła lista (bez czerwonych błędów)."""
+    try:
+        _wybor_z_filtrami(prefiks)
+    except Exception as e:   # noqa: BLE001 (wybór ćwiczenia nie może zablokować treningu)
+        st.caption(f"Filtry chwilowo niedostępne ({type(e).__name__}: {e}). Wybierz z pełnej listy.")
+        st.selectbox("Ćwiczenie z bazy", _nazwy_widoczne(), index=None, placeholder="Wybierz lub zacznij pisać...",
+                     key=f"{prefiks}_wybor2")
+        st.session_state[f"{prefiks}_wybor"] = st.session_state.get(f"{prefiks}_wybor2")
+
+
+def _wybor_z_filtrami(prefiks: str) -> None:
+    s = st.session_state
+    wsz = baza_cwiczen.WSZYSTKIE
+    lista = _wszystkie_cwiczenia_bazy()
+    kat = s.get(f"{prefiks}_f_kat")
+    kat = None if kat in (None, wsz) or not isinstance(kat, str) else kat
+    partie, sprzety = baza_cwiczen.partie_i_sprzet(lista, kat)
+    st.selectbox("Kategoria", [wsz] + list(baza_cwiczen.KATEGORIE), key=f"{prefiks}_f_kat",
+                 help="Zawęża listę: pchanie (klatka, barki, triceps), ciągnięcie (plecy, biceps), nogi, brzuch, cardio i skoki.")
+    st.text_input("Szukaj w bazie", placeholder="np. przysiad, wyciąg, lina, row...", key=f"{prefiks}_szukaj",
+                  help="Szuka po polsku i po angielsku w nazwie, sprzęcie i partii.")
+    if s.get(f"{prefiks}_f_partia") not in [wsz] + partie:
+        s[f"{prefiks}_f_partia"] = wsz
+    if s.get(f"{prefiks}_f_sprzet") not in [wsz] + sprzety:
+        s[f"{prefiks}_f_sprzet"] = wsz
+    k1, k2 = st.columns(2)
+    k1.selectbox("Partia", [wsz] + partie, key=f"{prefiks}_f_partia")
+    k2.selectbox("Sprzęt", [wsz] + sprzety, key=f"{prefiks}_f_sprzet")
+    st.toggle("Pokaż zaawansowane", key=f"{prefiks}_f_zaaw",
+              help="Ćwiczenia olimpijskie, strongman, dla zaawansowanych i warianty z łańcuchami. Domyślnie ukryte.")
+    dozwolony = profil.dozwolony_sprzet()
+    if dozwolony is not None:
+        st.toggle("Tylko sprzęt z mojej siłowni", value=True, key=f"{prefiks}_f_moj",
+                  help="Pokazuje tylko ćwiczenia, które zrobisz ze sprzętem zaznaczonym w Profilu (Moja siłownia). Wyłącz, żeby zobaczyć wszystko.")
+    ulubione = set(profil.ulubione())
+    wybrane = s.get(f"{prefiks}_wybor")
+    opcje = baza_cwiczen.filtruj(lista, s.get(f"{prefiks}_szukaj") or "", s.get(f"{prefiks}_f_partia") or wsz,
+                                 s.get(f"{prefiks}_f_sprzet") or wsz, bool(s.get(f"{prefiks}_f_zaaw")), wybrane, kat,
+                                 dozwolony if dozwolony is not None and s.get(f"{prefiks}_f_moj", True) else None, ulubione)
+    sprzet = {c["nazwa"]: c["sprzet"] for c in opcje}
+    st.selectbox(f"Ćwiczenie z bazy ({len(opcje)})", [c["nazwa"] for c in opcje], index=None,
+                 placeholder="Wybierz z listy...", key=f"{prefiks}_wybor",
+                 format_func=lambda n: ("★ " if n in ulubione else "") + (f"{n} · {sprzet[n]}" if sprzet.get(n) else n))
+
+
+def _wyczysc_wybor(prefiks: str) -> None:
+    s = st.session_state
+    s[f"{prefiks}_wybor"], s[f"{prefiks}_szukaj"] = None, ""
+    s[f"{prefiks}_f_partia"] = s[f"{prefiks}_f_sprzet"] = baza_cwiczen.WSZYSTKIE
+    s[f"{prefiks}_f_zaaw"], s[f"{prefiks}_f_kat"] = False, baza_cwiczen.WSZYSTKIE
+
+
+def _zamien_na_podobne(nazwa: str) -> None:
+    """Jedno dotknięcie: zamienia bieżące ćwiczenie na wybrane z listy podobnych (jednostka i cel jak przy zwykłej zamianie)."""
+    s = st.session_state
+    s["sesja_zam_nowe"], s["sesja_zam_wybor"], s["sesja_zam_jednostka"] = "", nazwa, "Automatycznie"
+    _zamien_cwiczenie()
+
+
+def _podobne_do_zamiany() -> None:
+    """Propozycje zamiany: ta sama partia, Twój sprzęt (Profil → Moja siłownia), inny sprzęt i ulubione wyżej."""
+    stan = _stan()
+    if not stan or not stan["cwiczenia"]:
+        return
+    obecne = stan["cwiczenia"][stan["biezace"]]["nazwa"]
+    try:
+        propozycje = baza_cwiczen.podobne(_wszystkie_cwiczenia_bazy(), obecne, profil.dozwolony_sprzet(), set(profil.ulubione()), 6)
+    except sqlite3.Error:
+        return
+    if not propozycje:
+        return
+    ulubione = set(profil.ulubione())
+    st.markdown("**Podobne do tego ćwiczenia**",
+                help="Ta sama partia mięśniowa. Uwzględniamy sprzęt z Profilu (Moja siłownia); inny sprzęt niż w obecnym ćwiczeniu jest wyżej, "
+                     "np. gdy sztanga jest zajęta, dostaniesz hantle albo maszynę. Dotknij, żeby zamienić.")
+    for i, c in enumerate(propozycje):
+        st.button(("★ " if c["nazwa"] in ulubione else "") + c["nazwa"] + (f" · {c['sprzet']}" if c["sprzet"] else ""),
+                  key=f"sesja_pod_{i}", on_click=_zamien_na_podobne, args=(c["nazwa"],), use_container_width=True)
+    st.markdown("**Albo wybierz z bazy**")
+
+
 @st.dialog("Zamień to ćwiczenie")
 def _okno_zamiany() -> None:
     """Okienko zamiany ćwiczenia. Po zamianie zamyka się samo (st.rerun odświeża całą stronę)."""
@@ -1757,7 +1925,8 @@ def _okno_zamiany() -> None:
         st.rerun()
     if "sesja_zam_blad" in s:
         st.error(s.pop("sesja_zam_blad"))
-    st.selectbox("Ćwiczenie z bazy", baza.lista_cwiczen(), index=None, placeholder="Wybierz lub zacznij pisać...", key="sesja_zam_wybor")
+    _podobne_do_zamiany()
+    _wybor_z_bazy("sesja_zam")
     st.text_input("...albo wpisz własne ćwiczenie", placeholder="np. Przysiad bułgarski", key="sesja_zam_nowe")
     st.selectbox("Partia (tylko dla nowego, własnego ćwiczenia)", lista_partii(), index=len(lista_partii()) - 1, key="sesja_zam_partia",
                  help="Do której partii mięśniowej zaliczyć nowe ćwiczenie. Dzięki temu liczy się w „Serie na partię” w Postępach. "
@@ -1868,7 +2037,7 @@ def _widok_cwiczenia(stan: dict) -> None:
 def _panel_dodawania(stan: dict) -> None:
     pusty = not stan["cwiczenia"]
     with st.expander("Dodaj ćwiczenie albo zmień przerwy", expanded=pusty):
-        st.selectbox("Ćwiczenie z bazy", baza.lista_cwiczen(), index=None, placeholder="Wybierz lub zacznij pisać...", key="sesja_dodaj_wybor")
+        _wybor_z_bazy("sesja_dodaj")
         st.text_input("...albo wpisz własne ćwiczenie", placeholder="np. Trójskok, Plank, Podciąganie", key="sesja_dodaj_nowe")
         st.selectbox("Partia (tylko dla nowego, własnego ćwiczenia)", lista_partii(), index=len(lista_partii()) - 1, key="sesja_dodaj_partia",
                      help="Do której partii mięśniowej zaliczyć nowe ćwiczenie. Dzięki temu liczy się w „Serie na partię” w Postępach. "
@@ -1956,6 +2125,40 @@ def widok_jesli_aktywna() -> bool:
     return False
 
 
+def cwiczenia_do_tabeli(cwiczenia: list[dict]) -> pd.DataFrame:
+    """Ćwiczenia treningu (np. ostatniego) w układzie tabeli presetu, żeby pokazać je tymi samymi kafelkami."""
+    return pd.DataFrame([{
+        "Cwiczenie": c["nazwa"], "Rola": c.get("rola") or "Główne", "Serie": c.get("serie_plan"),
+        "Powt_od": c.get("powt_od"), "Powt_do": c.get("powt_do"), "Jednostka": c.get("jednostka") or "powt.",
+        "Alternatywa": "", "Wskazowka": "",
+    } for c in cwiczenia], columns=["Cwiczenie", "Rola", "Serie", "Powt_od", "Powt_do", "Jednostka", "Alternatywa", "Wskazowka"])
+
+
+def karta_rekomendacji(karta: dict) -> None:
+    """Rekomendacja w ramce: pogrubiony tytuł i dwie, trzy krótkie linie (bez kolorowych bloków)."""
+    with st.container(border=True):
+        st.markdown(f"**{karta['tytul']}**")
+        for linia in karta["linie"]:
+            st.markdown(linia)
+
+
+def _rekomendacje_na_dzis(nazwa_presetu: str) -> None:
+    """Karty „Na dziś” z jawnych reguł (rekomendacje.py): lżejszy trening / odpoczynek oraz inne partie niż wczoraj."""
+    from rekomendacje import rekomendacje_na_dzis
+    rek = rekomendacje_na_dzis(date.today(), nazwa_presetu)
+    if rek["regeneracja"]:
+        karta_rekomendacji(rek["regeneracja"]["karta"])
+        if st.session_state.pop("lzejszy_zalecany", False):   # włączone z pozycji „Na dziś” w menu
+            st.session_state["start_lzejszy"] = True
+        st.toggle("Lżejszy trening (około 20% mniej serii)", key="start_lzejszy",
+                  help="Rekomendacja ze snu i gotowości. Po starcie możesz dodać serie, jeśli poczujesz się lepiej.")
+    if rek["partie"]:
+        karta_rekomendacji(rek["partie"]["karta"])
+        if rek["partie"]["propozycja"]:
+            st.button(f"Wybierz: {rek['partie']['propozycja']}", use_container_width=True, key="start_partie_btn",
+                      on_click=_wybierz_preset, args=(rek["partie"]["propozycja"],))
+
+
 def widok_startu(typ_planu: str | None = None) -> None:
     """Start prowadzonego treningu w dowolny dzień. Jedyny wybór to preset (on jest też rodzajem treningu).
     Domyślnie zaznaczony jest preset z dzisiejszego planu, a gdy plan go nie wskazuje, ten robiony ostatnio."""
@@ -1965,6 +2168,7 @@ def widok_startu(typ_planu: str | None = None) -> None:
 
     if widok_jesli_aktywna():
         return
+    z_dzisiejszego_planu = typ_planu is not None   # strona „Dziś: …” ma wybrany preset z planu; zakładka Treningi nie
     if typ_planu is None:
         dzis = plan_na_dzien()
         typ_planu = dzis["Typ"] if dzis["Aktywny"] else ""
@@ -1976,11 +2180,21 @@ def widok_startu(typ_planu: str | None = None) -> None:
     wiersz = None
     if not lista.empty:
         nazwy = lista["Nazwa"].tolist()
-        domyslny = domyslny_preset(lista, typ_planu)
-        nazwa = st.selectbox("Preset", nazwy, index=nazwy.index(domyslny) if domyslny in nazwy else 0, key="start_preset",
+        zalecany = st.session_state.pop("preset_zalecany", None)   # wybrany z pozycji „Na dziś” w menu
+        if zalecany in nazwy:
+            st.session_state["start_preset"] = zalecany
+        if z_dzisiejszego_planu:
+            domyslny = domyslny_preset(lista, typ_planu)
+        else:
+            domyslny = polecany_preset(lista, typ_planu)
+        nazwa = st.selectbox("Preset", nazwy, index=nazwy.index(domyslny) if domyslny in nazwy else None, key="start_preset",
+                             placeholder="Wybierz preset...",
                              help="Gotowa rozpiska ćwiczeń. Zarazem nazwa treningu w historii i w planie tygodnia. "
-                                  "Domyślnie ten z dzisiejszego planu albo ostatnio robiony.")
-        wiersz = lista[lista["Nazwa"] == nazwa].iloc[0]
+                                  "Zaznaczony jest ten z dzisiejszej rekomendacji (tej samej co „Na dziś” w menu), a bez rekomendacji ten z planu. "
+                                  "Gdy nie ma ani jednego, ani drugiego, wybierasz sam.")
+        if nazwa:
+            wiersz = lista[lista["Nazwa"] == nazwa].iloc[0]
+            _rekomendacje_na_dzis(nazwa)
     zapamietana = wczytaj_ustawienie("przerwa", "Auto")
     rzad_w_jednej_linii("start_przerwa")
     st.segmented_control("Przerwy między seriami", list(OPCJE_PRZERWY), default=zapamietana if zapamietana in OPCJE_PRZERWY else "Auto",
@@ -1995,25 +2209,27 @@ def widok_startu(typ_planu: str | None = None) -> None:
     if wiersz is not None:
         preset_id = int(wiersz["id"])
         ostatni = ostatni_trening_rodzaju(nazwa, _tekst(wiersz["Typ"]))
-        # 1) ten sam trening co ostatnio
+        # 1) główny przycisk: trening wg presetu (to, co chcesz robić)
+        st.button(f"Rozpocznij: {nazwa}", type="primary", use_container_width=True, key="start_preset_btn",
+                  on_click=rozpocznij_z_presetu, args=(preset_id,))
+        # 2) powtórka poprzedniego treningu jako dodatkowa opcja
         if ostatni:
-            st.button(f"Rozpocznij: {nazwa} (jak ostatnio)", type="primary", use_container_width=True, key="start_ostatni_btn",
+            st.button(f"Rozpocznij: {nazwa} (jak ostatnio)", type="secondary", use_container_width=True, key="start_ostatni_btn",
                       on_click=rozpocznij_z_ostatniego, args=(nazwa, _tekst(wiersz["Typ"])))
-        # 2) preset w wersji z rozpiski
-        st.button(f"Rozpocznij: {nazwa}" + (" (wg rozpiski)" if ostatni else ""), type="secondary" if ostatni else "primary",
-                  use_container_width=True, key="start_preset_btn", on_click=rozpocznij_z_presetu, args=(preset_id,))
         # 3) lista ćwiczeń schowana w jednym panelu (nic nie zajmuje miejsca, dopóki jej nie otworzysz)
-        podglad = widok_presetu_html(wiersz["Nazwa"], wiersz["Kategoria"], wiersz["Typ"], wiersz["Cel"] or "",
-                                     wczytaj_cwiczenia_presetu(preset_id))
+        def kafelki(tabela: pd.DataFrame) -> str:
+            return widok_presetu_html(wiersz["Nazwa"], wiersz["Kategoria"], wiersz["Typ"], wiersz["Cel"] or "", tabela)
+
+        podglad = kafelki(wczytaj_cwiczenia_presetu(preset_id))
         with st.expander("Zobacz ćwiczenia"):
             if ostatni:
                 data = datetime.fromisoformat(ostatni["data"]).strftime("%d.%m")
-                zakladka_ostatnio, zakladka_rozpiska = st.tabs([f"Jak ostatnio ({data})", "Wg rozpiski"])
+                zakladka_rozpiska, zakladka_ostatnio = st.tabs(["Wg rozpiski", f"Jak ostatnio ({data})"])
                 with zakladka_ostatnio:
-                    st.markdown("\n".join(f"- {c['nazwa']}" for c in ostatni["cwiczenia"]))
-                with zakladka_rozpiska:
-                    st.markdown(podglad, unsafe_allow_html=True)
+                    st.markdown(kafelki(cwiczenia_do_tabeli(ostatni["cwiczenia"])), unsafe_allow_html=True)
             else:
+                zakladka_rozpiska = st.container()
+            with zakladka_rozpiska:
                 st.markdown(podglad, unsafe_allow_html=True)
 
 
@@ -2167,7 +2383,7 @@ def _okno_edycji(sesja_id: int) -> None:
     st.markdown("**Ćwiczenia** (klik w komórkę, żeby zmienić; kosz po zaznaczeniu wiersza usuwa, pusty wiersz na dole dodaje)")
     if f"{k}_orig" not in s:
         s[f"{k}_orig"] = pd.DataFrame(t["wpisy"], columns=["Cwiczenie", "Ciezar", "Serie", "Powtorzenia", "Jednostka"])
-    nazwy = list(dict.fromkeys(list(s[f"{k}_orig"]["Cwiczenie"]) + list(baza.lista_cwiczen())))
+    nazwy = list(dict.fromkeys(list(s[f"{k}_orig"]["Cwiczenie"]) + _nazwy_widoczne()))
     s[f"{k}_df"] = st.data_editor(
         s[f"{k}_orig"], key=f"{k}_tabela", num_rows="dynamic", hide_index=True, use_container_width=True,
         column_config={
@@ -2228,9 +2444,15 @@ def _data_treningu(iso) -> tuple[str, "datetime | None"]:
         return str(iso), None
 
 
-def pytajnik(tekst: str) -> None:
-    """Sam znaczek „?” z podpowiedzią po dotknięciu, zamiast stale widocznego szarego opisu."""
-    st.markdown("&nbsp;", help=tekst)
+def pytajnik(tekst: str, w_prawo: bool = True) -> None:
+    """Sam znaczek „?” z podpowiedzią po dotknięciu, zamiast stale widocznego szarego opisu.
+    Domyślnie stoi przy prawej krawędzi, tuż pod blokiem, którego dotyczy (CSS `st-key-pytajnik_…` w szklo.py);
+    pod tytułem strony zostaje z lewej (w_prawo=False)."""
+    if not w_prawo:
+        st.markdown("&nbsp;", help=tekst)
+        return
+    with st.container(key=f"pytajnik_{zlib.crc32(tekst.encode('utf-8'))}"):
+        st.markdown("&nbsp;", help=tekst)
 
 
 def etykieta_treningu(t: dict) -> str:

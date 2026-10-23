@@ -12,6 +12,8 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+import uzytkownik
+
 SERWER = "https://ntfy.sh"
 PLIK_TEMATU = Path(__file__).with_name("ntfy_temat.txt")
 
@@ -29,7 +31,8 @@ def temat() -> str | None:
 
 
 def dostepne() -> bool:
-    return temat() is not None
+    """Powiadomienia o końcu przerwy idą na telefon właściciela, więc tylko jego konto może je włączyć."""
+    return temat() is not None and uzytkownik.czy_wlasciciel()
 
 
 def wyslij(tytul: str, tresc: str, priorytet: int = 4, tag: str = "alarm_clock") -> bool:

@@ -17,3 +17,27 @@ __pycache__/
 
 # Nazwa tematu powiadomień ntfy (działa jak hasło)
 ntfy_temat.txt
+
+# Zapamiętane logowanie do Garmina (tokeny dają dostęp do konta) i przerwa po błędzie
+.garmin_tokeny/
+.garmin_blokada
+
+# Sekrety logowania Google (client_secret, cookie_secret) - NIGDY do gita
+.streamlit/secrets.toml
+secrets.toml.off
+
+# Dane innych uzytkownikow (po jednym folderze na osobe) i kopie zapasowe
+dane/
+kopie/
+
+# Instancje gosci i ich lista
+goscie/
+goscie.txt
+
+# Eksporty i kopie robocze
+*.bak
+*.sqlite
+*.sqlite3
+*-journal
+*.db-wal
+*.db-shm

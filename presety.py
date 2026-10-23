@@ -66,32 +66,128 @@ def _dodaj_cwiczenie_jesli_brak(db: sqlite3.Connection, nazwa: str, partia: str)
     )
 
 
+def _wstaw_preset(db: sqlite3.Connection, preset: dict, kolejnosc: int) -> None:
+    """Wstawia jeden preset z ćwiczeniami (rodzaj treningu i brakujące ćwiczenia dopisuje do bazy)."""
+    kursor = db.execute(
+        "INSERT INTO presety (Nazwa, Typ, Kategoria, Cel, Kolejnosc) VALUES (?, ?, ?, ?, ?)",
+        (preset["Nazwa"], preset["Typ"], preset["Kategoria"], preset["Cel"], kolejnosc),
+    )
+    preset_id = kursor.lastrowid
+    _dodaj_typ_jesli_brak(db, preset["Typ"])
+    for numer, c in enumerate(preset["Cwiczenia"], start=1):
+        db.execute(
+            "INSERT INTO presety_cwiczenia "
+            "(Preset_id, Kolejnosc, Cwiczenie, Serie, Powt_od, Powt_do, Jednostka, Alternatywa, Wskazowka, Rola) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (preset_id, numer, c["Cwiczenie"], c["Serie"], c["Powt_od"], c["Powt_do"],
+             c["Jednostka"], c["Alternatywa"], c["Wskazowka"], c["Rola"]),
+        )
+        _dodaj_cwiczenie_jesli_brak(db, c["Cwiczenie"], c["Partia"])
+
+
+def _wczytaj_pakiety(db: sqlite3.Connection) -> None:
+    """Dokłada pakiety presetów (krótkie treningi, sporty) RAZ na pakiet. Presetów, które już masz
+    (także o tej samej nazwie), nie rusza, a usunięte pakiety nie wracają."""
+    from presety_dane import PAKIETY
+
+    db.execute("CREATE TABLE IF NOT EXISTS ustawienia (Klucz TEXT PRIMARY KEY, Wartosc TEXT)")
+    for flaga, pakiet in PAKIETY.items():
+        if db.execute("SELECT 1 FROM ustawienia WHERE Klucz = ?", (flaga,)).fetchone():
+            continue
+        istniejace = {w[0] for w in db.execute("SELECT Nazwa FROM presety")}
+        numer = db.execute("SELECT COALESCE(MAX(Kolejnosc), 0) FROM presety").fetchone()[0]
+        for preset in pakiet:
+            if preset["Nazwa"] in istniejace:
+                continue
+            numer += 1
+            _wstaw_preset(db, preset, numer)
+        db.execute("INSERT OR REPLACE INTO ustawienia (Klucz, Wartosc) VALUES (?, '1')", (flaga,))
+    db.commit()
+
+
+def _zamien_w_json(wartosc, stara: str, nowa: str):
+    """Zamienia w strukturze JSON (listy, słowniki) każdy tekst równy starej nazwie."""
+    if isinstance(wartosc, str):
+        return nowa if wartosc == stara else wartosc
+    if isinstance(wartosc, list):
+        return [_zamien_w_json(x, stara, nowa) for x in wartosc]
+    if isinstance(wartosc, dict):
+        return {k: _zamien_w_json(v, stara, nowa) for k, v in wartosc.items()}
+    return wartosc
+
+
+def _przemianuj_presety(db: sqlite3.Connection) -> None:
+    """Jednorazowo zamienia dawne nazwy presetów (np. „Góra 1: Push (klatka i barki)”) na zrozumiałe
+    („Góra push: klatka i barki”) w presetach, historii treningów, planie i trwającym treningu.
+    Przed zmianą robi kopię bazy. Preset o nowej nazwie, który już istnieje, zostaje nietknięty."""
+    import json
+    from datetime import datetime
+    from pathlib import Path
+
+    from presety_dane import PRZEMIANOWANIA
+
+    flaga = "presety_nazwy_v2"
+    db.execute("CREATE TABLE IF NOT EXISTS ustawienia (Klucz TEXT PRIMARY KEY, Wartosc TEXT)")
+    if db.execute("SELECT 1 FROM ustawienia WHERE Klucz = ?", (flaga,)).fetchone():
+        return
+    istnieje = {w[0] for w in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    obecne = {w[0] for w in db.execute("SELECT Nazwa FROM presety")}
+    do_zmiany = {s: n for s, n in PRZEMIANOWANIA.items() if s in obecne and n not in obecne}
+    if do_zmiany and Path(SCIEZKA_BAZY).exists():
+        folder = Path(SCIEZKA_BAZY).parent / "kopie"
+        folder.mkdir(exist_ok=True)
+        db.commit()
+        with closing(sqlite3.connect(folder / f"treningi_przed_nazwami_presetow_{datetime.now():%Y%m%d_%H%M%S}.db")) as kopia:
+            db.backup(kopia)
+    for stara, nowa in do_zmiany.items():
+        db.execute("UPDATE presety SET Nazwa = ? WHERE Nazwa = ?", (nowa, stara))
+        if "sesje" in istnieje:
+            db.execute("UPDATE sesje SET Typ_treningu = ? WHERE Typ_treningu = ?", (nowa, stara))
+            kolumny = [w[1] for w in db.execute("PRAGMA table_info(sesje)")]
+            if "Preset" in kolumny:
+                db.execute("UPDATE sesje SET Preset = ? WHERE Preset = ?", (nowa, stara))
+        if "plan_tygodniowy" in istnieje:
+            db.execute("UPDATE plan_tygodniowy SET Typ = ? WHERE Typ = ?", (nowa, stara))
+        if "trening_w_toku" in istnieje:
+            for id_, dane in db.execute("SELECT id, Dane FROM trening_w_toku").fetchall():
+                try:
+                    zmienione = json.dumps(_zamien_w_json(json.loads(dane), stara, nowa), ensure_ascii=False)
+                except ValueError:
+                    continue
+                if zmienione != dane:
+                    db.execute("UPDATE trening_w_toku SET Dane = ? WHERE id = ?", (zmienione, id_))
+    db.execute("INSERT OR REPLACE INTO ustawienia (Klucz, Wartosc) VALUES (?, '1')", (flaga,))
+    db.commit()
+
+
+def _kategorie_sportowe(db: sqlite3.Connection) -> None:
+    """Jednorazowo: presety sportowe ze wspólną kategorią „Sport” dostają kategorię swojej dyscypliny (z rodzaju, np. „Sport Tenis”)."""
+    from presety_dane import SPORTY
+
+    flaga = "presety_kategorie_sport_v1"
+    db.execute("CREATE TABLE IF NOT EXISTS ustawienia (Klucz TEXT PRIMARY KEY, Wartosc TEXT)")
+    if db.execute("SELECT 1 FROM ustawienia WHERE Klucz = ?", (flaga,)).fetchone():
+        return
+    for dyscyplina in SPORTY:
+        db.execute("UPDATE presety SET Kategoria = ? WHERE Kategoria = 'Sport' AND Typ = ?", (dyscyplina, f"Sport {dyscyplina}"))
+    db.execute("INSERT OR REPLACE INTO ustawienia (Klucz, Wartosc) VALUES (?, '1')", (flaga,))
+    db.commit()
+
+
 def wczytaj_presety_startowe() -> None:
-    """Wczytuje presety z presety_dane.py, ale tylko gdy tabela presetów jest pusta.
+    """Wczytuje presety z presety_dane.py: podstawowe tylko gdy tabela presetów jest pusta, pakiety dodatkowe raz.
     Dzięki temu Twoje zmiany nigdy nie są nadpisywane przy kolejnym uruchomieniu."""
     from presety_dane import PRESETY
 
     with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
         _utworz_tabele(db)
-        if db.execute("SELECT COUNT(*) FROM presety").fetchone()[0] > 0:
-            return
-        for numer, preset in enumerate(PRESETY, start=1):
-            kursor = db.execute(
-                "INSERT INTO presety (Nazwa, Typ, Kategoria, Cel, Kolejnosc) VALUES (?, ?, ?, ?, ?)",
-                (preset["Nazwa"], preset["Typ"], preset["Kategoria"], preset["Cel"], numer),
-            )
-            preset_id = kursor.lastrowid
-            _dodaj_typ_jesli_brak(db, preset["Typ"])
-            for kolejnosc, c in enumerate(preset["Cwiczenia"], start=1):
-                db.execute(
-                    "INSERT INTO presety_cwiczenia "
-                    "(Preset_id, Kolejnosc, Cwiczenie, Serie, Powt_od, Powt_do, Jednostka, Alternatywa, Wskazowka, Rola) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (preset_id, kolejnosc, c["Cwiczenie"], c["Serie"], c["Powt_od"], c["Powt_do"],
-                     c["Jednostka"], c["Alternatywa"], c["Wskazowka"], c["Rola"]),
-                )
-                _dodaj_cwiczenie_jesli_brak(db, c["Cwiczenie"], c["Partia"])
-        db.commit()
+        if db.execute("SELECT COUNT(*) FROM presety").fetchone()[0] == 0:
+            for numer, preset in enumerate(PRESETY, start=1):
+                _wstaw_preset(db, preset, numer)
+            db.commit()
+        _przemianuj_presety(db)
+        _wczytaj_pakiety(db)
+        _kategorie_sportowe(db)
 
 
 def lista_presetow() -> pd.DataFrame:

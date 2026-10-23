@@ -62,10 +62,25 @@ PALETA: dict[str, tuple[str, str]] = {
     "g3": ("#1B1B1A", "#8B5CFF"),
     "przycisk_tekst": ("#FFFFFF", "#0A0610"),
     "dzis_tekst": ("#F4ECDC", "#0A0610"),
+    # kafelek „Jutro” w menu: chłodne neony (cyjan, niebieski, mięta), żeby nie dublować różowo-pomarańczowego „Dziś”
+    "jutro1": ("#0B7BA8", "#2FD3FF"),
+    "jutro2": ("#2A5FC9", "#6C8CFF"),
+    "jutro3": ("#0E8A66", "#2EE6A6"),
+    "jutro_tekst": ("#FFFFFF", "#06121A"),
     # tytuł strony: trójkolorowa poświata (w jasnym motywie w jaśniejszych, bardziej przezroczystych odcieniach)
     "tytul_glow1": ("rgba(224,60,130,0.34)", "rgba(255,61,154,0.30)"),     # różowa, pod napisem
     "tytul_glow2": ("rgba(232,117,26,0.45)", "rgba(255,138,61,0.40)"),     # pomarańczowa, z lewej
     "tytul_glow3": ("rgba(138,92,200,0.42)", "rgba(139,92,255,0.40)"),     # fioletowa, z prawej
+    # mapa ciała (Postępy): sylwetka i skala od „brak” do „ponad zakres”
+    "mapa_tlo": ("#CFC2A6", "#1C1B21"),
+    "mapa_kontur": ("#AE9F78", "#3A3845"),
+    "mapa_0": ("#DDD1B8", "#2C2A34"),
+    "mapa_1": ("#A9DD8E", "#B5F2A8"),
+    "mapa_2": ("#2E9E55", "#2FBF6B"),
+    "mapa_3": ("#7B4FD8", "#8B5CFF"),
+    "mapa_4": ("#E0AC00", "#FFD23F"),
+    "mapa_5": ("#E8751A", "#FF8A3D"),
+    "mapa_6": ("#D5392F", "#FF4D5E"),
     # cienie, paski, animacje
     "cien_s": ("rgba(60,45,20,0.10)", "rgba(0,0,0,0.45)"),
     "cien_m": ("rgba(90,65,25,0.14)", "rgba(0,0,0,0.50)"),
