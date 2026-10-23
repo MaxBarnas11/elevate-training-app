@@ -37,7 +37,6 @@ def _ekran(tytul: str, podtytul: str = "") -> None:
 def ekran_logowania() -> None:
     _ekran("OVRLD", "Zaloguj się, żeby zacząć")
     st.button("Zaloguj się przez Google", type="primary", use_container_width=True, key="logowanie_google", on_click=st.login)
-    st.caption("Dostęp tylko dla zaproszonych osób. Logujesz się kontem Google, a aplikacja nie zna Twojego hasła.")
 
 
 def _ekran_odmowy(tytul: str, tresc_html: str) -> None:

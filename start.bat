@@ -19,10 +19,24 @@ if defined TS set "ADRES=%TS%"
 if /i "%~1"=="siec" set "ADRES=0.0.0.0"
 if /i "%~2"=="siec" set "ADRES=0.0.0.0"
 
+rem Logowanie Google dziala tylko pod adresem localhost (Google nie przyjmuje powrotu na adres Tailscale).
+rem Gdy w .streamlit\secrets.toml jest sekcja [auth] (i nie ustawiono OVRLD_LOGOWANIE=0), startujemy tylko lokalnie.
+set "LOGOWANIE="
+if exist ".streamlit\secrets.toml" findstr /i /c:"[auth]" ".streamlit\secrets.toml" >nul && set "LOGOWANIE=1"
+if "%OVRLD_LOGOWANIE%"=="0" set "LOGOWANIE="
+if "%OVRLD_LOGOWANIE%"=="1" set "LOGOWANIE=1"
+if defined LOGOWANIE if not "%ADRES%"=="0.0.0.0" set "ADRES=127.0.0.1"
+
 echo.
+if defined LOGOWANIE goto :info_logowanie
 if "%ADRES%"=="0.0.0.0" echo ===== TRYB "siec": aplikacja dostepna w calej sieci tego komputera, bez logowania! =====
 if "%ADRES%"=="127.0.0.1" echo ===== UWAGA: Tailscale nie dziala, aplikacja jest tylko na tym komputerze. Wlacz Tailscale i uruchom ponownie. =====
 if defined TS echo ===== Na telefonie wpisz: http://%TS%:%STREAMLIT_SERVER_PORT% =====
+goto :po_info
+:info_logowanie
+echo ===== LOGOWANIE GOOGLE WLACZONE: otworz na tym komputerze http://localhost:%STREAMLIT_SERVER_PORT% =====
+echo ===== Telefon przez Tailscale sie nie zaloguje. Zeby z niego korzystac, zmien nazwe .streamlit\secrets.toml na secrets.toml.off =====
+:po_info
 echo.
 
 set "OPCJE=--server.address %ADRES%"

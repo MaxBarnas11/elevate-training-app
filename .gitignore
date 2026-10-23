@@ -22,9 +22,9 @@ ntfy_temat.txt
 .garmin_tokeny/
 .garmin_blokada
 
-# Sekrety logowania Google (client_secret, cookie_secret) - NIGDY do gita
-.streamlit/secrets.toml
-secrets.toml.off
+# Sekrety logowania Google (client_secret, cookie_secret) - NIGDY do gita.
+# Wzorzec secrets* lapie tez pliki po zmianie nazwy (secrets.toml.off, secrets.off.toml, secrets.off).
+secrets*
 
 # Dane innych uzytkownikow (po jednym folderze na osobe) i kopie zapasowe
 dane/

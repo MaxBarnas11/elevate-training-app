@@ -52,7 +52,9 @@ if ($Tryb -eq "otworz") {
                 $c = New-Object Net.Sockets.TcpClient
                 $c.Connect($a, $port)
                 $c.Close()
-                Start-Process "http://${a}:$port"
+                # Logowanie Google dziala tylko pod "localhost" (nie pod 127.0.0.1), wiec tak otwieramy adres lokalny
+                $nazwa = if ($a -eq "127.0.0.1") { "localhost" } else { $a }
+                Start-Process "http://${nazwa}:$port"
                 exit 0
             } catch { }
         }

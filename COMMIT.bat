@@ -18,7 +18,7 @@ if not exist ".git" goto brakrepo
 git add -A 2>nul
 
 rem Bezpiecznik: jesli git sledzi haslo, baze lub token, nic nie zapisujemy.
-git ls-files | findstr /r /i "^\.env$ secrets\.toml \.db$ ^dane/ ^kopie/ ntfy_temat \.garmin_tokeny" >nul
+git ls-files | findstr /r /i "^\.env$ secrets \.db$ ^dane/ ^kopie/ ntfy_temat \.garmin_tokeny" >nul
 if not errorlevel 1 goto wrazliwe
 
 git diff --cached --quiet
@@ -49,7 +49,7 @@ goto koniec
 :wrazliwe
 echo STOP: git sledzi plik z haslami lub danymi. Nic nie zapisano.
 echo Podejrzane pliki:
-git ls-files | findstr /r /i "^\.env$ secrets\.toml \.db$ ^dane/ ^kopie/ ntfy_temat \.garmin_tokeny"
+git ls-files | findstr /r /i "^\.env$ secrets \.db$ ^dane/ ^kopie/ ntfy_temat \.garmin_tokeny"
 git reset -q
 echo Zrob zrzut ekranu tego okna i wklej go do Claude.
 goto koniec

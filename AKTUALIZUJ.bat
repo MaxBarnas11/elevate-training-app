@@ -15,7 +15,8 @@ if exist "%~dp0COMMIT.bat" (
 )
 echo Uruchamiam aplikacje...
 start "OVRLD-START" "%~dp0START.bat" cicho
-if exist "%~dp0GOSCIE.bat" start "" /min "%~dp0GOSCIE.bat"
+rem Instancje gosci startujemy tylko wtedy, gdy sa zapisani (goscie.txt); cmd /c zamyka okno po zakonczeniu.
+if exist "%~dp0goscie.txt" if exist "%~dp0GOSCIE.bat" start "" /min cmd /c "%~dp0GOSCIE.bat"
 start "" /min powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File "%~dp0zarzadzaj.ps1" otworz
 timeout /t 2 /nobreak >nul
 exit /b
