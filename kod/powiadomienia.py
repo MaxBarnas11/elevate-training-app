@@ -15,7 +15,7 @@ from pathlib import Path
 import uzytkownik
 
 SERWER = "https://ntfy.sh"
-PLIK_TEMATU = Path(__file__).with_name("ntfy_temat.txt")
+PLIK_TEMATU = uzytkownik.FOLDER_APLIKACJI / "ntfy_temat.txt"
 
 _blokada = threading.Lock()
 _budziki: dict[str, tuple[threading.Timer, str]] = {}   # klucz -> (zegar, czas docelowy)

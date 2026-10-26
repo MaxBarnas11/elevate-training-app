@@ -5,6 +5,11 @@ from datetime import date, timedelta
 import html
 import json
 from pathlib import Path
+import sys
+
+_KOD = str(Path(__file__).resolve().parent / "kod")   # moduły aplikacji leżą w folderze kod/
+if _KOD not in sys.path:
+    sys.path.insert(0, _KOD)
 
 import streamlit as st
 import streamlit.components.v1 as components

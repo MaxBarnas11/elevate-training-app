@@ -14,7 +14,8 @@ from pathlib import Path
 
 import streamlit as st
 
-FOLDER_APLIKACJI = Path(__file__).parent
+# Główny folder aplikacji (tam leżą treningi.db, dane/, kopie/, .env, ntfy_temat.txt); ten plik leży w kod/, więc o jeden poziom wyżej.
+FOLDER_APLIKACJI = Path(__file__).resolve().parent.parent
 KLUCZ_SESJI = "ovrld_uzytkownik"
 
 

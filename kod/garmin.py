@@ -16,10 +16,10 @@ from garminconnect import GarminConnectConnectionError
 
 # Zapamiętane tokeny logowania: po pierwszym udanym logowaniu hasło nie jest już wysyłane, tylko odświeżany token.
 # Ciągłe logowanie hasłem (każde odświeżenie, każdy restart) kończy się blokadą Cloudflare po stronie Garmina.
-SCIEZKA_TOKENOW = baza.SCIEZKA_BAZY.parent / ".garmin_tokeny" if baza.TRYB_GOSCIA else Path(__file__).parent / ".garmin_tokeny"
+SCIEZKA_TOKENOW = baza.SCIEZKA_BAZY.parent / ".garmin_tokeny" if baza.TRYB_GOSCIA else uzytkownik.FOLDER_APLIKACJI / ".garmin_tokeny"
 # Po nieudanym logowaniu przez tyle minut nie próbujemy ponownie (kolejne próby tylko przedłużają blokadę)
 PRZERWA_PO_BLEDZIE_MIN = 60
-PLIK_BLOKADY = baza.SCIEZKA_BAZY.parent / ".garmin_blokada" if baza.TRYB_GOSCIA else Path(__file__).parent / ".garmin_blokada"
+PLIK_BLOKADY = baza.SCIEZKA_BAZY.parent / ".garmin_blokada" if baza.TRYB_GOSCIA else uzytkownik.FOLDER_APLIKACJI / ".garmin_blokada"
 
 
 def _sprawdz_blokade() -> None:
@@ -128,11 +128,19 @@ def pobierz_jeden_dzien(garmin: Garmin, dzien: str) -> dict:
     }
 
 
+def synchronizuj_garmin(dzisiaj: str) -> dict:
+    """Zwraca dzisiejsze dane z Garmina i uzupełnia bazę o brakujące dni (tylko dla właściciela).
+    Sprawdzenie właściciela stoi POZA cache: trafienie w cache nie uruchamia ciała funkcji, więc kontrola w środku
+    nie ochroniłaby danych właściciela przed innym zalogowanym."""
+    if baza.TRYB_GOSCIA or not uzytkownik.czy_wlasciciel():   # dane logowania do Garmina z .env należą tylko do właściciela
+        raise ValueError("Garmin jest dostępny tylko na koncie właściciela")
+    return _synchronizuj_garmin_cache(dzisiaj)
+
+
 # Cache na 15 min, więc kliknięcia w aplikacji nie męczą Garmina
 @st.cache_data(ttl=900, show_spinner=False)
-def synchronizuj_garmin(dzisiaj: str) -> dict:
-    """Zwraca dzisiejsze dane z Garmina i uzupełnia bazę o brakujące dni."""
-    if baza.TRYB_GOSCIA or not uzytkownik.czy_wlasciciel():   # dane logowania do Garmina z .env należą tylko do właściciela
+def _synchronizuj_garmin_cache(dzisiaj: str) -> dict:
+    if baza.TRYB_GOSCIA or not uzytkownik.czy_wlasciciel():   # druga kontrola (pierwsza jest w synchronizuj_garmin)
         raise ValueError("Garmin jest dostępny tylko na koncie właściciela")
     email = os.getenv("GARMIN_EMAIL")
     haslo = os.getenv("GARMIN_PASSWORD")
