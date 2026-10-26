@@ -168,18 +168,16 @@ def _krok_dane() -> None:
     zapisane = profil.wczytaj()
     st.text_input("Imię", value=zapisane["imie"], max_chars=profil.MAKS_IMIE, key="ob_imie",
                   placeholder="Jak mamy się do Ciebie zwracać?")
-    st.date_input("Data urodzenia", value=zapisane["data_ur"], min_value=date(1920, 1, 1), max_value=date.today(),
-                  format="DD.MM.YYYY", key="ob_data_ur",
-                  help=f"Aplikacja jest dla osób od {WIEK_MINIMALNY} lat. Datę zapisujemy tylko po to, żeby dopasować aplikację do wieku.")
+    data_ur = profil.pole_daty("Data urodzenia", "ob_data_ur", zapisane["data_ur"],
+                               help=f"Aplikacja jest dla osób od {WIEK_MINIMALNY} lat. Datę zapisujemy tylko po to, żeby dopasować aplikację do wieku.")
     imie = (s.get("ob_imie") or "").strip()
-    data_ur = s.get("ob_data_ur")
     if s.get("ob_za_mlody"):
         st.error(f"Ta aplikacja jest dla osób od {WIEK_MINIMALNY} lat, więc nie możemy Cię jeszcze wpuścić. Nic o Tobie nie zapisaliśmy. "
                  "Jeśli data jest błędna, popraw ją i kliknij Dalej.")
         st.button("Wyloguj", use_container_width=True, key="ob_wyloguj", on_click=uzytkownik.wyloguj)
 
     def dalej() -> None:
-        d = st.session_state.get("ob_data_ur")
+        d = profil.data_z_pol("ob_data_ur")
         if not wiek_wystarczajacy(d):
             st.session_state["ob_za_mlody"] = True
             return

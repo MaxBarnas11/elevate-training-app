@@ -134,6 +134,46 @@ def wymaga_zgody_opiekuna(dane: dict | None = None, dzis: date | None = None) ->
     return w is not None and w < WIEK_ZGODY_CYFROWEJ
 
 
+MIESIACE = ("styczeń", "luty", "marzec", "kwiecień", "maj", "czerwiec", "lipiec", "sierpień", "wrzesień", "październik", "listopad",
+            "grudzień")
+
+
+def data_z_pol(klucz: str) -> date | None:
+    """Data z trzech pól (dzień, miesiąc, rok) o podanym kluczu; None, gdy czegoś brakuje albo taka data nie istnieje."""
+    import streamlit as st
+    s = st.session_state
+    d, m, r = s.get(f"{klucz}_d"), s.get(f"{klucz}_m"), s.get(f"{klucz}_r")
+    if d is None or m not in MIESIACE or r is None:
+        return None
+    try:
+        wynik = date(int(r), MIESIACE.index(m) + 1, int(d))
+    except ValueError:
+        return None
+    return wynik if wynik <= date.today() else None
+
+
+def pole_daty(etykieta: str, klucz: str, wartosc: date | None, help: str | None = None) -> date | None:
+    """Data urodzenia z trzech list (dzień, miesiąc, rok). Kalendarz Streamlita na telefonie wymaga długiego przewijania lat,
+    a trzy listy pozwalają wybrać rok jednym dotknięciem."""
+    import streamlit as st
+    s = st.session_state
+    st.markdown(f"<div style='font-size:0.85rem;margin-bottom:-0.4rem'>{etykieta}</div>", unsafe_allow_html=True)
+    if help:
+        st.caption(help)
+    k1, k2, k3 = st.columns([1, 2, 1.4])
+    lata = list(range(date.today().year - 10, 1919, -1))   # nikt poniżej 10 lat; krótsza lista = mniej przewijania
+    k1.selectbox("Dzień", list(range(1, 32)), index=wartosc.day - 1 if wartosc else None, key=f"{klucz}_d",
+                 placeholder="Dzień", label_visibility="collapsed")
+    k2.selectbox("Miesiąc", list(MIESIACE), index=wartosc.month - 1 if wartosc else None, key=f"{klucz}_m",
+                 placeholder="Miesiąc", label_visibility="collapsed")
+    k3.selectbox("Rok", lata, index=lata.index(wartosc.year) if wartosc and wartosc.year in lata else None, key=f"{klucz}_r",
+                 placeholder="Rok", label_visibility="collapsed")
+    wynik = data_z_pol(klucz)
+    if wynik is None and all(s.get(f"{klucz}_{x}") is not None for x in "dmr"):
+        st.caption("Taka data nie istnieje.")
+    return wynik
+
+
 def pierwsze_imie(dane: dict | None = None) -> str:
     """Pierwsze słowo imienia, oczyszczone ze znaków Markdown (trafia do nagłówków)."""
     dane = dane if dane is not None else wczytaj()
@@ -765,9 +805,10 @@ body { padding: 6px 4px 14px 4px; color: var(--tekst); }
 def _zapisz_dane() -> None:
     import streamlit as st
     s = st.session_state
-    niepelnol = (wiek(s.get("pr_data_ur")) or 99) < WIEK_DOROSLOSCI
+    data_ur = data_z_pol("pr_data_ur")
+    niepelnol = (wiek(data_ur) or 99) < WIEK_DOROSLOSCI
     cel = s.get("pr_cel")
-    zapisz(imie=s.get("pr_imie"), data_ur=s.get("pr_data_ur"), wzrost=s.get("pr_wzrost"),
+    zapisz(imie=s.get("pr_imie"), data_ur=data_ur, wzrost=s.get("pr_wzrost"),
            waga_cel=None if niepelnol else s.get("pr_waga_cel"),
            cel=cel if cel in CELE and not (niepelnol and cel == CEL_REDUKCJA) else None)
     s["pr_edycja"] = False       # po zapisie formularz zwija się do przycisku „Edytuj dane”
@@ -857,10 +898,9 @@ def _sekcja_moje_dane(dane: dict, dorosly_jest: bool, wypelniony: bool) -> None:
             st.button("Edytuj dane", use_container_width=True, key="pr_edytuj", on_click=_edytuj_dane)
             return
         st.text_input("Imię", value=dane["imie"], max_chars=MAKS_IMIE, key="pr_imie", placeholder="Jak mamy się do Ciebie zwracać?")
-        st.date_input("Data urodzenia", value=dane["data_ur"], min_value=date(1920, 1, 1), max_value=date.today(),
-                      format="DD.MM.YYYY", key="pr_data_ur",
-                      help="Potrzebna, żeby dopasować aplikację do wieku. Dla osób poniżej 18 lat nie ustawiamy celów wagowych, "
-                           "a poniżej 16 lat potrzebna jest zgoda rodzica lub opiekuna (sekcja Dane i prywatność).")
+        pole_daty("Data urodzenia", "pr_data_ur", dane["data_ur"],
+                  help="Potrzebna, żeby dopasować aplikację do wieku. Dla osób poniżej 18 lat nie ustawiamy celów wagowych, "
+                       "a poniżej 16 lat potrzebna jest zgoda rodzica lub opiekuna (sekcja Dane i prywatność).")
         cele = [c for c in CELE if dorosly_jest or c != CEL_REDUKCJA]
         st.selectbox("Cel treningowy", cele, index=cele.index(dane["cel"]) if dane["cel"] in cele else None, key="pr_cel",
                      placeholder="Wybierz cel...", help="Pomaga dobrać propozycje treningów. Możesz go zmienić w każdej chwili.")
