@@ -4,6 +4,8 @@ enableStaticServing = true
 # Ochrona przed podszywaniem sie pod uzytkownika przez obca strone (CSRF) i przed obcymi domenami (CORS); to domyslne ustawienia, jawnie dla pewnosci
 enableXsrfProtection = true
 enableCORS = true
+# Limit wysyłanych plików (jedyny upload to zdjęcie profilowe, limit 8 MB w aplikacji); domyślnie Streamlit pozwala na 200 MB
+maxUploadSize = 10
 
 [browser]
 # Bez wysylania statystyk uzycia do Streamlita

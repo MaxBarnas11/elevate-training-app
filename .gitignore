@@ -15,6 +15,9 @@ __pycache__/
 # Pliki tymczasowe do podmiany (podmien.bat)
 *_NOWA.py
 
+# Plik tworzony automatycznie przez aplikacje (komponent naglowka profilu)
+kod/komponenty/
+
 # Nazwa tematu powiadomień ntfy (działa jak hasło)
 ntfy_temat.txt
 
