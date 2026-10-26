@@ -575,7 +575,7 @@ def naglowek_profilu_html(dane: dict | None = None, waga: tuple[float, str] | No
 
 # ---------------------------------------------------------------- teksty: informacja o prywatności i zasady (wersja robocza do przeglądu prawnika)
 
-KONTAKT_ADMINISTRATORA = ""     # np. adres e-mail do spraw danych; puste = „osoba, która udostępniła Ci aplikację”
+KONTAKT_ADMINISTRATORA = "ovrld.kontakt@gmail.com"     # np. adres e-mail do spraw danych; puste = „osoba, która udostępniła Ci aplikację”
 
 
 def informacja_o_prywatnosci() -> str:
