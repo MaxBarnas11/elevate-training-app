@@ -683,10 +683,10 @@ def domyslny_preset(lista: pd.DataFrame, typ_planu: str | None = None) -> str | 
 
 def polecany_preset(lista: pd.DataFrame, typ_planu: str | None) -> str | None:
     """Preset zaznaczony na starcie w zakładce Treningi: ten z dzisiejszej rekomendacji (to samo, co pozycja „Na dziś” w menu).
-    Rekomendacja liczy się od planu albo ostatnio robionego treningu. Bez rekomendacji zostaje preset z planu, a gdy i planu
-    nie ma, None: użytkownik wybiera sam, żeby nie myślał, że trening jest już dobrany."""
+    Rekomendacja liczy się od presetu z planu. Bez rekomendacji zostaje preset z planu, a gdy plan nie wskazuje treningu,
+    None: użytkownik wybiera sam (rodzaj, potem preset), żeby nie myślał, że trening jest już dobrany."""
     plan = preset_z_etykiety(lista, typ_planu)
-    baza = plan or (None if typ_planu else preset_z_etykiety(lista, ostatnia_etykieta_treningu()))
+    baza = plan
     if not baza:
         return None
     try:
@@ -2159,6 +2159,27 @@ def _rekomendacje_na_dzis(nazwa_presetu: str) -> None:
                       on_click=_wybierz_preset, args=(rek["partie"]["propozycja"],))
 
 
+RODZAJ_INNE = "Inne"
+
+
+def _rodzaje_kolumna(lista: pd.DataFrame) -> pd.Series:
+    """Rodzaj każdego presetu do kafelków na starcie: kategoria, ale wszystkie dyscypliny sportowe (Typ „Sport …”) razem jako „Sport”,
+    a puste kategorie jako „Inne”."""
+    kategoria = lista["Kategoria"].fillna("").astype(str).str.strip().replace("", RODZAJ_INNE)
+    sport = lista["Typ"].fillna("").astype(str).str.startswith("Sport ")
+    return kategoria.mask(sport, "Sport")
+
+
+def _rodzaje_presetow(lista: pd.DataFrame) -> list[str]:
+    """Rodzaje presetów w kolejności, w jakiej występują na liście."""
+    return list(dict.fromkeys(_rodzaje_kolumna(lista)))
+
+
+def _wyczysc_wybor_presetu() -> None:
+    """Po zmianie rodzaju lista presetów jest inna, więc poprzedni wybór znika (użytkownik wybiera z zawężonej listy)."""
+    st.session_state["start_preset"] = None
+
+
 def widok_startu(typ_planu: str | None = None) -> None:
     """Start prowadzonego treningu w dowolny dzień. Jedyny wybór to preset (on jest też rodzajem treningu).
     Domyślnie zaznaczony jest preset z dzisiejszego planu, a gdy plan go nie wskazuje, ten robiony ostatnio."""
@@ -2179,19 +2200,33 @@ def widok_startu(typ_planu: str | None = None) -> None:
     lista = lista_presetow()
     wiersz = None
     if not lista.empty:
-        nazwy = lista["Nazwa"].tolist()
+        wszystkie = lista["Nazwa"].tolist()
         zalecany = st.session_state.pop("preset_zalecany", None)   # wybrany z pozycji „Na dziś” w menu
-        if zalecany in nazwy:
+        if zalecany in wszystkie:
             st.session_state["start_preset"] = zalecany
+            st.session_state["start_rodzaj"] = None   # wybrany preset ma być widoczny na liście, więc bez filtra
         if z_dzisiejszego_planu:
-            domyslny = domyslny_preset(lista, typ_planu)
+            # plan wskazuje trening: zaznaczamy go; gdy plan go nie wskazuje, zostaje puste (nie podstawiamy ostatnio robionego)
+            domyslny = preset_z_etykiety(lista, typ_planu) if typ_planu else None
         else:
             domyslny = polecany_preset(lista, typ_planu)
-        nazwa = st.selectbox("Preset", nazwy, index=nazwy.index(domyslny) if domyslny in nazwy else None, key="start_preset",
-                             placeholder="Wybierz preset...",
+        rodzaje = _rodzaje_presetow(lista)
+        rodzaj = None
+        if len(rodzaje) > 1:   # przy jednym rodzaju filtr nie ma sensu
+            st.markdown("<style>.st-key-start_rodzaj [data-testid='stButtonGroup']{flex-wrap:wrap !important;gap:4px !important;}"
+                        ".st-key-start_rodzaj button{padding:0.3rem 0.6rem !important;min-height:0 !important;}"
+                        ".st-key-start_rodzaj button p{font-size:0.85rem !important;}</style>", unsafe_allow_html=True)
+            rodzaj = st.segmented_control("Rodzaj treningu", rodzaje, key="start_rodzaj", on_change=_wyczysc_wybor_presetu,
+                                          help="Zawęża listę presetów do jednego rodzaju. Kliknij ten sam rodzaj jeszcze raz, żeby pokazać wszystkie.")
+        nazwy = lista[_rodzaje_kolumna(lista) == rodzaj]["Nazwa"].tolist() if rodzaj else wszystkie
+        wybrany = st.session_state.get("start_preset")
+        if wybrany is not None and wybrany not in nazwy:   # stary wybór spoza zawężonej listy
+            st.session_state["start_preset"] = None
+        nazwa = st.selectbox("Preset", nazwy, index=nazwy.index(domyslny) if (domyslny in nazwy and not rodzaj) else None,
+                             key="start_preset", placeholder="Wybierz preset..." if not rodzaj else f"Wybierz preset ({rodzaj})...",
                              help="Gotowa rozpiska ćwiczeń. Zarazem nazwa treningu w historii i w planie tygodnia. "
-                                  "Zaznaczony jest ten z dzisiejszej rekomendacji (tej samej co „Na dziś” w menu), a bez rekomendacji ten z planu. "
-                                  "Gdy nie ma ani jednego, ani drugiego, wybierasz sam.")
+                                  "Zaznaczony jest ten z dzisiejszego planu. Gdy plan nie wskazuje treningu, wybierasz sam: "
+                                  "najpierw rodzaj treningu, potem preset z zawężonej listy.")
         if nazwa:
             wiersz = lista[lista["Nazwa"] == nazwa].iloc[0]
             _rekomendacje_na_dzis(nazwa)
