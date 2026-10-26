@@ -1,5 +1,5 @@
 @echo off
-rem Osobna instancja OVRLD dla goscia: wlasna, pusta baza (folder goscie\imie), wlasny port, bez Garmina wlasciciela.
+rem Osobna instancja Struo dla goscia: wlasna, pusta baza (folder goscie\imie), wlasny port, bez Garmina wlasciciela.
 rem Uzycie: narzedzia\GOSC.bat imie [port] [cicho]      np.  GOSC.bat ania 8502
 rem Gosc wchodzi pod http://ADRES-TAILSCALE:port (musi miec dostep do Twojego komputera w Tailscale).
 cd /d "%~dp0.."

@@ -290,7 +290,7 @@ def naglowek_strony(tytul: str, podtytul: str = "", kolor: str = NIEBIESKI) -> s
             "display:flex;justify-content:space-between;align-items:center;")
     return (
         f'<div style="padding:30px 4px 18px 4px;margin:0 0 14px 0;">'
-        f'<div style="{meta}"><span>● OVRLD</span><span>{napis_daty} ✦</span></div>'
+        f'<div style="{meta}"><span>● STRUO</span><span>{napis_daty} ✦</span></div>'
         f'<div style="height:1px;background:{v("obram2")};margin:10px 0 14px 0;"></div>'
         f'<div style="font-family:{CZCIONKA_TYTULOW};font-weight:800;font-stretch:125%;text-transform:uppercase;'
         f'font-size:{rozmiar};line-height:1.02;letter-spacing:0.01em;color:{KOLOR_TEKSTU};'

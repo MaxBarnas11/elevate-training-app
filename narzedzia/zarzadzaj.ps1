@@ -1,16 +1,16 @@
 # Pomocnik dla AKTUALIZUJ.bat.
-#   zamknij : zamyka stara karte OVRLD w przegladarce, aplikacje i WSZYSTKIE okna konsoli START.bat
+#   zamknij : zamyka stara karte Struo w przegladarce, aplikacje i WSZYSTKIE okna konsoli START.bat
 #             (takze osierocone po poprzednich uruchomieniach)
 #   otworz  : po starcie serwera otwiera aplikacje w przegladarce
 param([string]$Tryb = "zamknij")
 $ErrorActionPreference = "SilentlyContinue"
 $port = 8501
 $przegladarki = "chrome", "msedge", "firefox", "brave", "opera", "vivaldi"
-# Tytul karty OVRLD (albo dawny ELEVATE): "OVRLD", "Treningi <kropka> OVRLD" itp. (np. strona repozytorium na GitHubie sie nie zalicza)
+# Tytul karty STRUO (albo dawny OVRLD / ELEVATE): "STRUO", "Treningi <kropka> STRUO" itp. (np. strona repozytorium na GitHubie sie nie zalicza)
 $sep = "[" + [char]0x00B7 + "|\-]"
-$wzorzec = "^(.+ $sep )?(OVRLD|ELEVATE)( $sep .+)?$"
+$wzorzec = "^(.+ $sep )?(STRUO|OVRLD|ELEVATE)( $sep .+)?$"
 
-function Karty-Ovrld {
+function Karty-Struo {
     Get-Process -Name $przegladarki | Where-Object {
         $t = $_.MainWindowTitle -replace ' - (Google Chrome|Microsoft.? Edge|Mozilla Firefox|Brave|Opera|Vivaldi)$', ''
         $_.MainWindowHandle -ne 0 -and $t -cmatch $wzorzec
@@ -18,9 +18,9 @@ function Karty-Ovrld {
 }
 
 if ($Tryb -eq "zamknij") {
-    # 1) stara karta (okno, w ktorym OVRLD jest aktywna karta) zamykana skrotem Ctrl+W
+    # 1) stara karta (okno, w ktorym Struo jest aktywna karta) zamykana skrotem Ctrl+W
     $sh = New-Object -ComObject WScript.Shell
-    foreach ($p in @(Karty-Ovrld)) {
+    foreach ($p in @(Karty-Struo)) {
         if ($sh.AppActivate($p.Id)) {
             Start-Sleep -Milliseconds 400
             $sh.SendKeys("^w")

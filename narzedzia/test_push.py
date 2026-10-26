@@ -21,7 +21,7 @@ def wczytaj_temat() -> str:
         temat = PLIK_TEMATU.read_text(encoding="utf-8").strip()
         if temat:
             return temat
-    temat = "elevate-" + secrets.token_urlsafe(18)
+    temat = "struo-" + secrets.token_urlsafe(18)
     PLIK_TEMATU.write_text(temat, encoding="utf-8")
     return temat
 
@@ -43,14 +43,14 @@ def main() -> None:
     print("Na iPhonie: aplikacja ntfy -> plus -> wklej nazwę tematu -> Subscribe.")
     input("Gdy temat jest dodany, naciśnij Enter tutaj... ")
 
-    wyslij(temat, "ELEVATE: test 1", "Jeśli to widzisz, połączenie działa.", priorytet=3)
+    wyslij(temat, "STRUO: test 1", "Jeśli to widzisz, połączenie działa.", priorytet=3)
     print("Wysłano test 1 (od razu). Sprawdź, czy dotarł.")
     input("Teraz zablokuj telefon i połóż go na stole. Gdy będziesz gotowy, naciśnij Enter... ")
 
     print(f"Test 2 zostanie wysłany za {opoznienie} s. Nie dotykaj telefonu.")
     time.sleep(opoznienie)
     czas = datetime.now().strftime("%H:%M:%S")
-    wyslij(temat, "ELEVATE: koniec przerwy", f"Czas na kolejną serię. Wysłano o {czas}.", priorytet=4)
+    wyslij(temat, "STRUO: koniec przerwy", f"Czas na kolejną serię. Wysłano o {czas}.", priorytet=4)
     print(f"Wysłano test 2 o {czas}. Zapisz, o której godzinie telefon go pokazał (ekran zablokowany).")
 
 

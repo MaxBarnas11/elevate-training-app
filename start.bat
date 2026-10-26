@@ -5,7 +5,7 @@ rem wiec nie moze byc dostepna dla kazdego w domu, na silowni czy w hotelu.
 rem Parametry (w dowolnej kolejnosci): "cicho" = bez otwierania przegladarki (tak robi AKTUALIZUJ.bat),
 rem "siec" = awaryjnie nasluchuj w calej sieci Wi-Fi (jak dawniej; tylko w zaufanej sieci).
 cd /d "%~dp0"
-title OVRLD-START
+title STRUO-START
 call venv\Scripts\activate
 
 set "TS="

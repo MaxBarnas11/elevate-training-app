@@ -20,7 +20,7 @@ if exist "%~dp0narzedzia\COMMIT.bat" (
   if "%lista%"=="" (call "%~dp0narzedzia\COMMIT.bat" auto "Zmiany reczne") else (call "%~dp0narzedzia\COMMIT.bat" auto "Aktualizacja:%lista%")
 )
 echo Uruchamiam aplikacje...
-start "OVRLD-START" "%~dp0START.bat" cicho
+start "STRUO-START" "%~dp0START.bat" cicho
 rem Instancje gosci startujemy tylko wtedy, gdy sa zapisani (goscie.txt); cmd /c zamyka okno po zakonczeniu.
 if exist "%~dp0goscie.txt" if exist "%~dp0narzedzia\GOSCIE.bat" start "" /min cmd /c "%~dp0narzedzia\GOSCIE.bat"
 start "" /min powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File "%~dp0narzedzia\zarzadzaj.ps1" otworz

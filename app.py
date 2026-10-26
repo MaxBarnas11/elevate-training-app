@@ -51,7 +51,7 @@ from plan import (wczytaj_plan, zapisz_plan, podsumowanie_tygodnia, plan_na_dzie
 # Wczytuje zmienne z pliku .env (email i hasło do Garmina)
 load_dotenv()
 
-NAZWA_APLIKACJI = "OVRLD"
+NAZWA_APLIKACJI = "STRUO"
 _IKONA = Path(__file__).parent / "static" / "ikona-180.png"
 st.set_page_config(
     page_title=NAZWA_APLIKACJI, page_icon=str(_IKONA) if _IKONA.exists() else "🏋️", layout="wide",
@@ -409,7 +409,7 @@ with st.sidebar:
         ik.rel = 'apple-touch-icon'; ik.sizes = '180x180'; ik.href = '/app/static/ikona-180.png';
         d.head.appendChild(ik);
         if (!d.querySelector('meta[name="apple-mobile-web-app-title"]')) {
-            const t = d.createElement('meta'); t.name = 'apple-mobile-web-app-title'; t.content = 'OVRLD'; d.head.appendChild(t);
+            const t = d.createElement('meta'); t.name = 'apple-mobile-web-app-title'; t.content = 'STRUO'; d.head.appendChild(t);
         }
             ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (e) {
                 d.addEventListener(e, function (ev) { ev.preventDefault(); }, {passive: false});

@@ -322,7 +322,7 @@ def eksport_zip() -> bytes:
     """Wszystkie Twoje dane w jednym pliku ZIP: tabele jako CSV (Excel otwiera polskie znaki), zdjęcie i opis."""
     bufor = io.BytesIO()
     teraz = datetime.now()
-    opis = [f"Eksport danych z aplikacji OVRLD, {teraz:%Y-%m-%d %H:%M}.", "",
+    opis = [f"Eksport danych z aplikacji Struo, {teraz:%Y-%m-%d %H:%M}.", "",
             "Każdy plik CSV to jedna tabela z Twoimi danymi (kodowanie UTF-8).", ""]
     with zipfile.ZipFile(bufor, "w", zipfile.ZIP_DEFLATED) as z, closing(_polacz()) as db:
         for tabela in _tabele(db):
@@ -944,11 +944,11 @@ def widok_profilu() -> None:
         if c1.button("Przygotuj eksport", use_container_width=True, key="pr_eksport",
                      help="Wszystkie Twoje dane jako pliki CSV w jednym ZIP-ie (do otwarcia w Excelu)."):
             s["pr_eksport_dane"] = eksport_zip()
-            s["pr_eksport_nazwa"] = f"ovrld_eksport_{date.today():%Y%m%d}.zip"
+            s["pr_eksport_nazwa"] = f"struo_eksport_{date.today():%Y%m%d}.zip"
         if c2.button("Przygotuj kopię", use_container_width=True, key="pr_kopia",
                      help="Pełna kopia bazy (plik .db). Przydaje się przy przenosinach na nowy komputer albo serwer."):
             s["pr_kopia_dane"] = kopia_bajty()
-            s["pr_kopia_nazwa"] = f"ovrld_kopia_{date.today():%Y%m%d}.db"
+            s["pr_kopia_nazwa"] = f"struo_kopia_{date.today():%Y%m%d}.db"
         if s.get("pr_eksport_dane"):
             st.download_button(f"Pobierz eksport ({len(s['pr_eksport_dane']) // 1024 + 1} KB)", s["pr_eksport_dane"], file_name=s["pr_eksport_nazwa"],
                                mime="application/zip", use_container_width=True, key="pr_eksport_pobierz")

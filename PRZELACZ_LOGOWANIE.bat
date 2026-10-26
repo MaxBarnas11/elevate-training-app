@@ -43,7 +43,7 @@ echo ===== TRYB TELEFON (bez logowania). Uruchamiam aplikacje... =====
 call "%~dp0AKTUALIZUJ.bat"
 echo.
 echo ===== GOTOWE: TRYB TELEFON =====
-echo Na telefonie wpisz adres z okna OVRLD-START (http://100.x.x.x:8501).
+echo Na telefonie wpisz adres z okna STRUO-START (http://100.x.x.x:8501).
 echo Bez logowania: kazdy, kto ma dostep do tego adresu, widzi Twoje dane (adres znasz tylko Ty i Tailscale).
 echo.
 pause

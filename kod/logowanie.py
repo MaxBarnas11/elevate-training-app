@@ -35,7 +35,7 @@ def _ekran(tytul: str, podtytul: str = "") -> None:
 
 
 def ekran_logowania() -> None:
-    _ekran("OVRLD", "Zaloguj się, żeby zacząć")
+    _ekran("STRUO", "Zaloguj się, żeby zacząć")
     st.button("Zaloguj się przez Google", type="primary", use_container_width=True, key="logowanie_google", on_click=st.login)
 
 
@@ -49,7 +49,7 @@ def wymagaj_logowania() -> None:
     if not uzytkownik.logowanie_wymagane():
         return
     if not uzytkownik.auth_skonfigurowane():
-        _ekran("OVRLD", "Logowanie nie jest skonfigurowane")
+        _ekran("STRUO", "Logowanie nie jest skonfigurowane")
         if uzytkownik.secrets_uszkodzone():
             st.error("Plik .streamlit/secrets.toml jest uszkodzony (błąd składni). Popraw go albo zmień jego nazwę na secrets.toml.off, "
                      "żeby wrócić do pracy bez logowania. Dopóki tak jest, aplikacja nikogo nie wpuszcza.")
