@@ -28,6 +28,8 @@ MIN_WZROST, MAKS_WZROST = 100, 250
 MIN_WAGA, MAKS_WAGA = 30.0, 300.0
 WIEK_DOROSLOSCI = 18
 WIEK_ZGODY_CYFROWEJ = 16            # w Polsce poniżej 16 lat dane przetwarza się za zgodą rodzica lub opiekuna
+CEL_REDUKCJA = "Redukcja tkanki tłuszczowej"
+CELE = ("Siła", "Masa mięśniowa", CEL_REDUKCJA, "Kondycja i zdrowie")   # cel treningowy (onboarding i Profil)
 ROZMIAR_ZDJECIA = 256               # px, kwadrat
 MAKS_BAJTOW_ZDJECIA = 8 * 1024 * 1024
 MAKS_PIKSELI_ZDJECIA = 40_000_000
@@ -64,11 +66,13 @@ def _tabele(db: sqlite3.Connection) -> list[str]:
 # ---------------------------------------------------------------- dane osobowe
 
 def wczytaj() -> dict:
-    """Dane profilu: imie, data_ur (date), wzrost (int), waga_cel (float), zgoda_zdrowie i zgoda_opiekun (data zgody, tekst)."""
+    """Dane profilu: imie, data_ur (date), wzrost (int), waga_cel (float), cel (cel treningowy), onboarding (data ukończenia pierwszych
+    kroków; puste = jeszcze nie przeszedł), zgoda_zdrowie i zgoda_opiekun (data zgody, tekst)."""
     with closing(_polacz()) as db:
         surowe = dict(db.execute("SELECT Klucz, Wartosc FROM profil").fetchall())
     wynik: dict = {"imie": (surowe.get("imie") or "").strip(), "data_ur": None, "wzrost": None, "waga_cel": None,
-                   "zgoda_zdrowie": surowe.get("zgoda_zdrowie") or "", "zgoda_opiekun": surowe.get("zgoda_opiekun") or ""}
+                   "zgoda_zdrowie": surowe.get("zgoda_zdrowie") or "", "zgoda_opiekun": surowe.get("zgoda_opiekun") or "",
+                   "cel": surowe.get("cel") if surowe.get("cel") in CELE else "", "onboarding": surowe.get("onboarding") or ""}
     try:
         if surowe.get("data_ur"):
             wynik["data_ur"] = date.fromisoformat(surowe["data_ur"])
@@ -582,7 +586,7 @@ def informacja_o_prywatnosci() -> str:
     admin = "osoba, która udostępniła Ci tę aplikację" + (f" ({KONTAKT_ADMINISTRATORA})" if KONTAKT_ADMINISTRATORA else "")
     return (
         f"**Administrator:** {admin}.\n\n"
-        "**Jakie dane zapisujemy:** imię, datę urodzenia, wzrost, cel wagi, zdjęcie profilowe (jeśli dodasz), treningi, serie i ciężary, "
+        "**Jakie dane zapisujemy:** imię, datę urodzenia, wzrost, cel wagi i cel treningowy, zdjęcie profilowe (jeśli dodasz), treningi, serie i ciężary, "
         "wagę, sen, tętno oraz inne dane o zdrowiu i samopoczuciu, notatki i zgłoszone uwagi.\n\n"
         "**Po co:** tylko do działania aplikacji: historia, postępy i podpowiedzi treningowe. Nie sprzedajemy danych, nie używamy ich do reklam ani analityki.\n\n"
         "**Podstawa prawna:** Twoja zgoda (art. 6 ust. 1 lit. a oraz art. 9 ust. 2 lit. a RODO). Możesz ją cofnąć w każdej chwili w Profilu "
@@ -762,8 +766,10 @@ def _zapisz_dane() -> None:
     import streamlit as st
     s = st.session_state
     niepelnol = (wiek(s.get("pr_data_ur")) or 99) < WIEK_DOROSLOSCI
+    cel = s.get("pr_cel")
     zapisz(imie=s.get("pr_imie"), data_ur=s.get("pr_data_ur"), wzrost=s.get("pr_wzrost"),
-           waga_cel=None if niepelnol else s.get("pr_waga_cel"))
+           waga_cel=None if niepelnol else s.get("pr_waga_cel"),
+           cel=cel if cel in CELE and not (niepelnol and cel == CEL_REDUKCJA) else None)
     s["pr_edycja"] = False       # po zapisie formularz zwija się do przycisku „Edytuj dane”
     st.toast("Profil zapisany.")
 
@@ -855,6 +861,9 @@ def _sekcja_moje_dane(dane: dict, dorosly_jest: bool, wypelniony: bool) -> None:
                       format="DD.MM.YYYY", key="pr_data_ur",
                       help="Potrzebna, żeby dopasować aplikację do wieku. Dla osób poniżej 18 lat nie ustawiamy celów wagowych, "
                            "a poniżej 16 lat potrzebna jest zgoda rodzica lub opiekuna (sekcja Dane i prywatność).")
+        cele = [c for c in CELE if dorosly_jest or c != CEL_REDUKCJA]
+        st.selectbox("Cel treningowy", cele, index=cele.index(dane["cel"]) if dane["cel"] in cele else None, key="pr_cel",
+                     placeholder="Wybierz cel...", help="Pomaga dobrać propozycje treningów. Możesz go zmienić w każdej chwili.")
         k1, k2 = st.columns(2) if dorosly_jest else (st, None)
         k1.number_input("Wzrost (cm)", min_value=MIN_WZROST, max_value=MAKS_WZROST, value=dane["wzrost"], step=1, key="pr_wzrost")
         if k2 is not None:

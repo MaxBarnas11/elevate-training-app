@@ -22,6 +22,7 @@ from garminconnect import (
 
 import baza
 import logowanie
+import onboarding
 import uzytkownik
 from garmin import formatuj_czas, ostatnie_zapisane_dane, synchronizuj_garmin
 from rekomendacje import rekomendacje_na_dzis, trening_dzis_zapisany
@@ -58,6 +59,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 logowanie.wymagaj_logowania()   # przy wymaganym logowaniu: ekran logowania i stop; zanim ruszy cokolwiek z bazą
+onboarding.wymagaj_onboardingu()   # nowa osoba (nie właściciel) najpierw przechodzi pierwsze kroki; reszta aplikacji czeka
 # Dodatkowy CSS: czcionka bezszeryfowa, zaokrąglone rogi i subtelne cienie
 CSS_DODATKOWY = """
 <style>
