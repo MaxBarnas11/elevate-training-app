@@ -1798,18 +1798,30 @@ def _nazwa_pigulki(stan: dict, i: int) -> str:
 
 CSS_LISTA = (
     "<style>"
-    ".st-key-sesja_lista [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;gap:8px !important;}"
+    ".st-key-sesja_lista [data-testid='stVerticalBlock']{gap:0.45rem !important;}"
+    ".st-key-sesja_lista [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;gap:6px !important;align-items:center;}"
     ".st-key-sesja_lista [data-testid='stColumn'],.st-key-sesja_lista [data-testid='column']"
     "{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}"
-    ".st-key-sesja_lista button{min-height:2.3rem;padding:0 0.3rem;font-size:0.9rem;}"
+    # ikony ↓ i ✕ (druga i trzecia kolumna) są wąskie; nazwa zajmuje resztę wiersza
+    ".st-key-sesja_lista [data-testid='stColumn']:nth-child(n+2),.st-key-sesja_lista [data-testid='column']:nth-child(n+2)"
+    "{flex:0 0 2.9rem !important;}"
+    ".st-key-sesja_lista button{min-height:2.5rem;padding:0 0.3rem;font-size:0.95rem;}"
+    ".st-key-sesja_lista [class*='st-key-sesja_lo_'] button{justify-content:flex-start;padding:0 0.7rem;text-align:left;}"
+    ".st-key-sesja_lista [class*='st-key-sesja_lo_'] button{overflow:hidden;}"
+    ".st-key-sesja_lista [class*='st-key-sesja_lo_'] button > div,.st-key-sesja_lista [class*='st-key-sesja_lo_'] button > span"
+    "{min-width:0;max-width:100%;overflow:hidden;}"
+    ".st-key-sesja_lista [class*='st-key-sesja_lo_'] button p{overflow:hidden;display:block;text-overflow:ellipsis;white-space:nowrap;"
+    "max-width:100%;text-align:left;}"
     ".st-key-sesja_lista [class*='st-key-sesja_lu_'] button,.st-key-sesja_lista [class*='st-key-sesja_lt_'] button"
     "{color:var(--e-kasuj);border-color:var(--e-kasuj_ramka);}"
+    ".st-key-sesja_lista .sz-pytanie{font-size:0.9rem;line-height:1.25;}"
     "</style>"
 )
 
 
 def _lista_cwiczen(stan: dict) -> None:
-    """Pełna lista ćwiczeń: otwórz, zrób później (na koniec), usuń (z potwierdzeniem, gdy są już serie)."""
+    """Lista ćwiczeń, jedno w wierszu: stuknięcie w nazwę otwiera ćwiczenie, ↓ przenosi je na koniec, ✕ usuwa
+    (z potwierdzeniem w tym samym wierszu, gdy są już serie)."""
     ile = len(stan["cwiczenia"])
     with st.expander(f"Lista ćwiczeń ({ile}): kolejność i usuwanie"):
         with st.container(key="sesja_lista"):
@@ -1819,22 +1831,23 @@ def _lista_cwiczen(stan: dict) -> None:
                 potw = None
             for i, c in enumerate(stan["cwiczenia"]):
                 zrobione = len(serie_robocze(c))
-                aktualne = (" · gotowe" if cwiczenie_gotowe(c) else "") + (" · teraz" if i == stan["biezace"] else "")
-                st.markdown(f"**{i + 1}. {html.escape(c['nazwa'])}**  \n"
-                            f"<span style='font-size:0.85rem;color:{KOLOR_PRZYGASZONY};'>serie {zrobione}/{c['serie_plan']}{aktualne}</span>",
-                            unsafe_allow_html=True)
                 if potw == i:
-                    st.warning(f"Usunąć to ćwiczenie razem z {zrobione} zapisanymi seriami?")
-                    k1, k2 = st.columns(2)
-                    k1.button("Tak, usuń", key=f"sesja_lt_{i}", on_click=_usun_potwierdzone, use_container_width=True)
-                    k2.button("Anuluj", key=f"sesja_la_{i}", on_click=_anuluj_usuwanie, use_container_width=True)
-                else:
                     k1, k2, k3 = st.columns(3)
-                    k1.button("Otwórz", key=f"sesja_lo_{i}", on_click=_otworz, args=(i,), use_container_width=True,
-                              disabled=i == stan["biezace"])
-                    k2.button("Później", key=f"sesja_lp_{i}", on_click=_pozniej, args=(i,), use_container_width=True,
-                              disabled=i == ile - 1, help="Przenosi na koniec treningu")
-                    k3.button("Usuń", key=f"sesja_lu_{i}", on_click=_usun_z_listy, args=(i,), use_container_width=True)
+                    k1.markdown(f"<div class='sz-pytanie'>Usunąć „{html.escape(c['nazwa'])}” razem z {zrobione} seriami?</div>",
+                                unsafe_allow_html=True)
+                    k2.button("Tak", key=f"sesja_lt_{i}", on_click=_usun_potwierdzone, use_container_width=True)
+                    k3.button("Nie", key=f"sesja_la_{i}", on_click=_anuluj_usuwanie, use_container_width=True)
+                    continue
+                znak = "✓" if cwiczenie_gotowe(c) else ("●" if i == stan["biezace"] else "")
+                # postęp przed nazwą, bo długa nazwa jest przycinana wielokropkiem
+                etykieta = f"{i + 1}. {znak + ' ' if znak else ''}{zrobione}/{c['serie_plan']} · {c['nazwa']}"
+                k1, k2, k3 = st.columns(3)
+                k1.button(etykieta, key=f"sesja_lo_{i}", on_click=_otworz, args=(i,), use_container_width=True,
+                          help="Otwórz to ćwiczenie" if i != stan["biezace"] else None)
+                k2.button("↓", key=f"sesja_lp_{i}", on_click=_pozniej, args=(i,), use_container_width=True,
+                          disabled=i == ile - 1, help="Przenieś na koniec treningu")
+                k3.button("✕", key=f"sesja_lu_{i}", on_click=_usun_z_listy, args=(i,), use_container_width=True,
+                          help="Usuń ćwiczenie")
 
 
 def _przygotuj_pola(c: dict, nr: int) -> None:
