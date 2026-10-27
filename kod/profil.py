@@ -963,6 +963,9 @@ def widok_profilu() -> None:
                        placeholder="Szukaj po nazwie...",
                        help="Ulubione są na górze listy przy wyborze ćwiczenia i oznaczone gwiazdką.")
 
+    import generator
+    generator.sekcja_profilu()
+
     if wypelniony:
         _sekcja_moje_dane(dane, dorosly_jest, wypelniony)
 
