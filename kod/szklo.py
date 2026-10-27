@@ -71,6 +71,11 @@ CSS_SZKLO = """
 }
 [role="group"][data-rac] input, [role="group"][data-rac] textarea { background: transparent !important; font-weight: 600; }
 [role="group"][data-rac] button { background: transparent !important; }
+/* Jedna warstwa: tło i poświatę ma tylko zewnętrzne szklane pole. Wnętrze (samo pole tekstowe, także w stanie aktywnym)
+   jest przezroczyste; „html body” podnosi ważność reguły ponad kolory pól ustawiane w app.py (css_pol). */
+html body [role="group"][data-rac] *:not(svg):not(path):not(input:-webkit-autofill) {
+    background: transparent !important; background-color: transparent !important; box-shadow: none !important;
+}
 
 /* ---------- Otwarta lista wyboru: szklany panel, wygodne pozycje ---------- */
 [data-testid="stSelectboxVirtualDropdown"] {
