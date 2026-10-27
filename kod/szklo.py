@@ -59,16 +59,13 @@ CSS_SZKLO = """
 [role="group"][data-rac] {
     border-radius: 14px !important; min-height: 3rem;
     border: 1.5px solid var(--e-obram2) !important;
-    background: var(--sz-mgla-lekka), var(--sz-baza) !important;
-    box-shadow: var(--sz-polysk) !important;
+    background: var(--sz-blask), var(--sz-odcien), var(--sz-baza) !important;
+    box-shadow: var(--sz-krawedz) !important;
     transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
 }
 [role="group"][data-rac][data-hovered] { border-color: var(--e-obram_hover) !important; }
-[role="group"][data-rac][data-focus-within] {
-    border-color: transparent !important;
-    background: var(--sz-mgla) padding-box, linear-gradient(var(--e-kafelek), var(--e-kafelek)) padding-box, var(--sz-ramka) border-box !important;
-    box-shadow: var(--sz-polysk), 0 0 0 4px color-mix(in srgb, var(--e-g2) 18%, transparent) !important;
-}
+/* Aktywne pole: tylko jaśniejsza ramka (bez kolorowej poświaty wokół), tak jak przyciski */
+[role="group"][data-rac][data-focus-within] { border-color: var(--e-obram_hover) !important; }
 [role="group"][data-rac] input, [role="group"][data-rac] textarea { background: transparent !important; font-weight: 600; }
 [role="group"][data-rac] button { background: transparent !important; }
 /* Jedna warstwa: tło i poświatę ma tylko zewnętrzne szklane pole. Wnętrze (samo pole tekstowe, także w stanie aktywnym)
