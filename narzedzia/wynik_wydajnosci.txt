@@ -1,0 +1,25 @@
+﻿Data: 2026-10-27 00:11
+Pamiec RAM: wolne 4,7 GB z 15,7 GB
+Od uruchomienia komputera: 100,0 godz.
+Obciazenie procesora teraz: 6 %
+
+=== Procesy python / streamlit (kazda kopia aplikacji to osobny proces) ===
+(brak)
+
+=== Porty aplikacji (8501-8520) ===
+(nic nie nasluchuje)
+Otwarte polaczenia z przegladarek/telefonu do aplikacji: 0
+
+=== 10 procesow z najwiekszym zuzyciem procesora (lacznie od startu) ===
+claude (PID 18900) | CPU 2085 s | RAM 756 MB
+chrome (PID 27080) | CPU 1399 s | RAM 173 MB
+claude (PID 5056) | CPU 1114 s | RAM 225 MB
+chrome (PID 27580) | CPU 792 s | RAM 268 MB
+claude (PID 22896) | CPU 740 s | RAM 280 MB
+explorer (PID 8504) | CPU 716 s | RAM 385 MB
+chrome (PID 26404) | CPU 542 s | RAM 261 MB
+CrossDeviceService (PID 12388) | CPU 262 s | RAM 123 MB
+chrome (PID 13084) | CPU 262 s | RAM 114 MB
+esrv (PID 4452) | CPU 220 s | RAM 58 MB
+
+Okna konsoli (cmd/powershell) otwarte teraz: 2

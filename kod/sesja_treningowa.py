@@ -24,6 +24,7 @@ import streamlit as st
 
 import baza
 import baza_cwiczen
+import komp_ui
 import powiadomienia
 import profil
 from karty import (
@@ -45,7 +46,6 @@ PRZERWA_DODATEK = 60                     # sekundy przerwy po dodatku i ćwiczen
 PRZERWA_ROZGRZEWKA = 60                  # sekundy przerwy po serii rozgrzewkowej
 SCHEMAT_ROZGRZEWKI = ((0.5, 5), (0.7, 3), (0.85, 1))   # (część ciężaru roboczego, powtórzenia)
 OPCJE_PRZERWY = {"60 s": 60, "90 s": 90, "2 min": 120, "3 min": 180, "Auto": None, "Wył.": 0}   # kolejność = układ przycisków: cztery czasy, niżej duże Auto i Wył.
-OPCJE_RPE = list(range(1, 11))
 
 
 def rzad_w_jednej_linii(klucz: str) -> None:
@@ -236,6 +236,21 @@ def dlugosc_przerwy(cwiczenie: dict, ustawienie: int | None = None) -> int:
     return PRZERWA_DODATEK
 
 
+def cwiczenie_gotowe(c: dict) -> bool:
+    """Ćwiczenie jest wykonane, gdy zrobiono planowaną liczbę serii albo oznaczono je zielonym ptaszkiem (np. 3 serie z 4)."""
+    rob = serie_robocze(c)
+    return bool(rob) and (len(rob) >= c["serie_plan"] or bool(c.get("gotowe")))
+
+
+def oznacz_gotowe(stan: dict, nr: int) -> bool:
+    """Zielony ptaszek: zamyka ćwiczenie mimo mniejszej liczby serii niż w planie. Bez żadnej serii roboczej nie działa."""
+    c = stan["cwiczenia"][nr]
+    if not serie_robocze(c):
+        return False
+    c["gotowe"] = True
+    return True
+
+
 def serie_robocze(c: dict) -> list[dict]:
     """Serie bez rozgrzewkowych: tylko one liczą się do planu, objętości, rekordów i historii."""
     return [s for s in c["serie"] if not s.get("rozgrz")]
@@ -282,6 +297,7 @@ def cofnij_serie(stan: dict, nr: int) -> bool:
     if not c["serie"]:
         return False
     c["serie"].pop()
+    c.pop("gotowe", None)   # po cofnięciu serii ćwiczenie znów jest w trakcie
     stan["przerwa_do"], stan["przerwa_dl"] = None, 0
     return True
 
@@ -460,9 +476,11 @@ def zamien_cwiczenie(stan: dict, nr: int, nazwa: str, jednostka: str | None = No
 
 
 def postep(stan: dict) -> tuple[int, int]:
-    """(zrobione serie, zaplanowane serie); nadprogramowe serie podnoszą plan, żeby pasek nie przekraczał 100%."""
+    """(zrobione serie, zaplanowane serie); nadprogramowe serie podnoszą plan, żeby pasek nie przekraczał 100%.
+    Ćwiczenie oznaczone ptaszkiem liczy się tyle, ile serii zrobiono (3 z 4 to też komplet)."""
     zrobione = sum(len(serie_robocze(c)) for c in stan["cwiczenia"])
-    plan = sum(max(c["serie_plan"], len(serie_robocze(c))) for c in stan["cwiczenia"])
+    plan = sum(len(serie_robocze(c)) if cwiczenie_gotowe(c) else max(c["serie_plan"], len(serie_robocze(c)))
+               for c in stan["cwiczenia"])
     return zrobione, plan
 
 
@@ -1343,7 +1361,7 @@ def aktywna() -> bool:
 def _wyczysc_pola() -> None:
     s = st.session_state
     for klucz in list(s.keys()):
-        if klucz.startswith(("sesja_ci_", "sesja_po_", "sesja_rpe_", "sesja_zob_", "sesja_rozgrz_", "sesja_nota_")):
+        if klucz.startswith(("sesja_ci_", "sesja_po_", "sesja_rpe_", "sesja_rpek_", "sesja_zob_", "sesja_rozgrz_", "sesja_nota_")):
             del s[klucz]
 
 
@@ -1414,13 +1432,11 @@ def _zapisz_serie(nr: int) -> None:
     c = stan["cwiczenia"][nr]
     ciezar = float(s.get(f"sesja_ci_{nr}") or 0.0) if pokaz_ciezar(c, bool(s.get(f"sesja_zob_{nr}"))) else 0.0
     rozgrzewka = bool(s.get(f"sesja_rozgrz_{nr}"))
-    dodaj_serie(stan, nr, ciezar, powt, None if rozgrzewka else s.get(f"sesja_rpe_{nr}"), ustawienie_przerwy(stan),
-                rozgrzewka=rozgrzewka)
+    rpe = None if rozgrzewka else komp_ui.wartosc_rpe(s, _klucz_rpe(c, nr))
+    dodaj_serie(stan, nr, ciezar, powt, rpe, ustawienie_przerwy(stan), rozgrzewka=rozgrzewka)
     if rozgrzewka:   # pola od razu na kolejny krok rozgrzewki
         s[f"sesja_ci_{nr}"], s[f"sesja_po_{nr}"] = _domyslne_pola(c, True)
-    else:
-        s[f"sesja_rpe_{nr}"] = None
-    zapisz_stan(stan)
+    zapisz_stan(stan)   # nowa seria zmienia klucz rzędu RPE, więc rząd wraca pusty
 
 
 def opis_serii_krotko(s: dict, jednostka: str) -> str:
@@ -1444,7 +1460,6 @@ def _powtorz_serie(nr: int) -> None:
     ostatnia = rob[-1]
     dodaj_serie(stan, nr, ostatnia["ciezar"], ostatnia["powt"], ostatnia.get("rpe"), ustawienie_przerwy(stan))
     s[f"sesja_ci_{nr}"], s[f"sesja_po_{nr}"] = float(ostatnia["ciezar"]), int(ostatnia["powt"])
-    s[f"sesja_rpe_{nr}"] = None
     zapisz_stan(stan)
 
 
@@ -1492,17 +1507,31 @@ def _przejdz(delta: int) -> None:
         zapisz_stan(stan)
 
 
+def _gotowe(nr: int) -> None:
+    """Zielony ptaszek: zapisuje ćwiczenie jako wykonane i przechodzi do następnego niewykonanego (jeśli jest).
+    Drugie stuknięcie w ćwiczeniu oznaczonym ptaszkiem zdejmuje oznaczenie (pomyłka)."""
+    stan = _stan()
+    if not stan:
+        return
+    if stan["cwiczenia"][nr].pop("gotowe", None):
+        zapisz_stan(stan)
+        return
+    if oznacz_gotowe(stan, nr):
+        ile = len(stan["cwiczenia"])
+        # następne niewykonane ćwiczenie (najpierw dalej na liście, potem od początku); przerwa po serii dalej się liczy
+        nastepne = [i for i in list(range(nr + 1, ile)) + list(range(nr)) if not cwiczenie_gotowe(stan["cwiczenia"][i])]
+        if nastepne:
+            stan["biezace"] = nastepne[0]
+        else:   # wszystko zrobione: przerwa nie jest już potrzebna
+            stan["przerwa_do"], stan["przerwa_dl"] = None, 0
+        zapisz_stan(stan)
+
+
 def _skocz() -> None:
     stan, nowy = _stan(), st.session_state.get("sesja_skok")
     if stan and nowy is not None and 0 <= nowy < len(stan["cwiczenia"]):
         stan["biezace"] = nowy
         zapisz_stan(stan)
-
-
-def _ustaw_rpe(nr: int, wartosc: int) -> None:
-    """RPE jednym stuknięciem; ponowne stuknięcie w zaznaczoną wartość czyści wybór (RPE jest opcjonalne)."""
-    s = st.session_state
-    s[f"sesja_rpe_{nr}"] = None if s.get(f"sesja_rpe_{nr}") == wartosc else wartosc
 
 
 def _otworz(nr: int) -> None:
@@ -1560,10 +1589,19 @@ def _wyczysc_cel(prefiks: str) -> None:
         st.session_state[f"{prefiks}_{pole}"] = 0
 
 
-def _pola_celu(prefiks: str) -> None:
+def _pola_celu(prefiks: str, kompakt: bool = False) -> None:
     """Cel nowego ćwiczenia: liczba serii i zakres na serię (powtórzenia, sekundy, minuty lub metry zależnie od jednostki).
-    0 oznacza „brak” (pole z 0 zamiast pustego, bo w pustym polu Streamlita przyciski + i − nie działają)."""
+    0 oznacza „brak” (pole z 0 zamiast pustego, bo w pustym polu Streamlita przyciski + i − nie działają).
+    Wersja kompaktowa (okno zamiany): trzy małe pola w jednym rzędzie, bez podpowiedzi."""
     st.markdown("**Cel (opcjonalnie)**")
+    if kompakt:
+        with st.container(key=f"{prefiks}_rzad"):
+            k1, k2, k3 = st.columns(3)
+            k1.number_input("Serie", min_value=0, max_value=20, step=1, value=0, key=f"{prefiks}_serie")
+            k2.number_input("Od", min_value=0, max_value=10000, step=1, value=0, key=f"{prefiks}_od")
+            k3.number_input("Do", min_value=0, max_value=10000, step=1, value=0, key=f"{prefiks}_do")
+        st.caption("0 = bez celu (serie z planu). „Od” i „Do” to zakres na serię w wybranej jednostce, np. 8–12.")
+        return
     st.number_input("Liczba serii (0 = auto)", min_value=0, max_value=20, step=1, value=0, key=f"{prefiks}_serie",
                     help="0: zostaje liczba serii z planu (dla minut: 1 seria).")
     k1, k2 = st.columns(2)
@@ -1596,25 +1634,23 @@ def _dodaj_cwiczenie() -> None:
 
 
 def _zamien_cwiczenie() -> None:
+    """Zamienia bieżące ćwiczenie na to z `zam_wyb`; jednostka i cel z ostatniego kroku okna (gdy ich nie było: automat)."""
     s, stan = st.session_state, _stan()
     if stan is None or not stan["cwiczenia"]:
         return
     nr = stan["biezace"]
-    nazwa = (s.get("sesja_zam_nowe") or "").strip() or (s.get("sesja_zam_wybor") or "")
+    nazwa = (s.get("zam_wyb") or "").strip()
     if not nazwa:
-        s["sesja_zam_blad"] = "Wybierz ćwiczenie z listy albo wpisz własną nazwę."
+        s["zam_blad"] = "Wybierz ćwiczenie z listy albo wpisz własną nazwę."
+        s["zam_krok"] = "start"
         return
-    dopisz_cwiczenie_do_bazy(nazwa, s.get("sesja_zam_partia"))
-    jednostka = JEDNOSTKI_WYBOR.get(s.get("sesja_zam_jednostka") or "Automatycznie") or jednostka_domyslna(nazwa)
+    dopisz_cwiczenie_do_bazy(nazwa, s.get("zam_partia_wyb"))
+    jednostka = JEDNOSTKI_WYBOR.get(s.get("zam_jedn") or "Automatycznie") or jednostka_domyslna(nazwa)
     zamien_cwiczenie(stan, nr, nazwa, jednostka)
-    ustaw_cel(stan["cwiczenia"][nr], *_odczytaj_cel("sesja_zam"))
+    ustaw_cel(stan["cwiczenia"][nr], *_odczytaj_cel("zam_cel"))
     stan["cwiczenia"][nr]["propozycja"] = zaproponuj(stan["cwiczenia"][nr])
     _wyczysc_pola()
-    s["sesja_zam_nowe"], s["sesja_zam_jednostka"] = "", "Automatycznie"
-    _wyczysc_wybor("sesja_zam")
-    s["sesja_zam_partia"] = "Inne"
-    _wyczysc_cel("sesja_zam")
-    s["sesja_zam_zamknij"] = True   # okno zamknie się przy następnym przebiegu (patrz _okno_zamiany)
+    s["zam_zamknij"] = True   # okno zamknie się przy następnym przebiegu (patrz _okno_zamiany)
     zapisz_stan(stan)
 
 
@@ -1763,7 +1799,7 @@ def _etykieta_wartosci(jednostka: str) -> str:
 def _nazwa_pigulki(stan: dict, i: int) -> str:
     """Sam numer (✓ przy wykonanym), żeby wszystkie ćwiczenia mieściły się w jednym rzędzie."""
     c = stan["cwiczenia"][i]
-    return f"{'✓' if len(serie_robocze(c)) >= c['serie_plan'] else ''}{i + 1}"
+    return f"{'✓' if cwiczenie_gotowe(c) else ''}{i + 1}"
 
 
 CSS_LISTA = (
@@ -1789,7 +1825,7 @@ def _lista_cwiczen(stan: dict) -> None:
                 potw = None
             for i, c in enumerate(stan["cwiczenia"]):
                 zrobione = len(serie_robocze(c))
-                aktualne = " · teraz" if i == stan["biezace"] else ""
+                aktualne = (" · gotowe" if cwiczenie_gotowe(c) else "") + (" · teraz" if i == stan["biezace"] else "")
                 st.markdown(f"**{i + 1}. {html.escape(c['nazwa'])}**  \n"
                             f"<span style='font-size:0.85rem;color:{KOLOR_PRZYGASZONY};'>serie {zrobione}/{c['serie_plan']}{aktualne}</span>",
                             unsafe_allow_html=True)
@@ -1815,7 +1851,6 @@ def _przygotuj_pola(c: dict, nr: int) -> None:
         s[f"sesja_ci_{nr}"] = ciezar
     if f"sesja_po_{nr}" not in s:
         s[f"sesja_po_{nr}"] = powt
-    s.setdefault(f"sesja_rpe_{nr}", None)
     if f"sesja_nota_{nr}" not in s:
         s[f"sesja_nota_{nr}"] = wczytaj_notatke(c["nazwa"])
 
@@ -1888,62 +1923,203 @@ def _wyczysc_wybor(prefiks: str) -> None:
     s[f"{prefiks}_f_zaaw"], s[f"{prefiks}_f_kat"] = False, baza_cwiczen.WSZYSTKIE
 
 
-def _zamien_na_podobne(nazwa: str) -> None:
-    """Jedno dotknięcie: zamienia bieżące ćwiczenie na wybrane z listy podobnych (jednostka i cel jak przy zwykłej zamianie)."""
+# --- Okno zamiany ćwiczenia: kolejne małe kroki zamiast jednej długiej listy ---------------------------------------
+# start (podobne ćwiczenia jednym stuknięciem) → filtry (kategoria, partia, sprzęt) → baza (szukanie i wybór) → cel i jednostka.
+# Albo: start → własne ćwiczenie → cel i jednostka. Streamlit usuwa stan pól, których w danym kroku nie rysujemy,
+# więc wybory przenosimy w zwykłe klucze (zam_f, zam_wyb, zam_partia_wyb) przyciskami „Dalej”.
+
+CSS_ZAMIANA = (
+    "<style>"
+    "[class*='st-key-zam_rzad'] [data-testid='stHorizontalBlock'],.st-key-zam_cel_rzad [data-testid='stHorizontalBlock']"
+    "{flex-wrap:nowrap !important;gap:8px !important;}"
+    "[class*='st-key-zam_rzad'] [data-testid='stColumn'],.st-key-zam_cel_rzad [data-testid='stColumn'],"
+    "[class*='st-key-zam_rzad'] [data-testid='column'],.st-key-zam_cel_rzad [data-testid='column']"
+    "{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}"
+    "</style>"
+)
+
+
+def _zam_reset() -> None:
     s = st.session_state
-    s["sesja_zam_nowe"], s["sesja_zam_wybor"], s["sesja_zam_jednostka"] = "", nazwa, "Automatycznie"
+    for klucz in [k for k in s.keys() if str(k).startswith("zam_")]:
+        del s[klucz]
+    s["zam_krok"] = "start"
+
+
+def _zam_krok(krok: str) -> None:
+    st.session_state["zam_krok"] = krok
+
+
+def _zam_do_bazy() -> None:
+    """Z kroku filtrów do wyboru z bazy: zapamiętuje filtry w zwykłym kluczu."""
+    s = st.session_state
+    s["zam_f"] = {"kat": s.get("zam_w_kat"), "partia": s.get("zam_w_partia"), "sprzet": s.get("zam_w_sprzet"),
+                  "zaaw": bool(s.get("zam_w_zaaw")), "moj": bool(s.get("zam_w_moj", True))}
+    s["zam_krok"] = "baza"
+
+
+def _zam_do_celu_z_bazy() -> None:
+    s = st.session_state
+    wybor = s.get("zam_w_wybor")
+    if not wybor:
+        s["zam_blad"] = "Wybierz ćwiczenie z listy."
+        return
+    s["zam_wyb"], s["zam_skad"], s["zam_partia_wyb"], s["zam_krok"] = wybor, "baza", None, "cel"
+
+
+def _zam_do_celu_wlasne() -> None:
+    s = st.session_state
+    nazwa = (s.get("zam_w_nowe") or "").strip()
+    if not nazwa:
+        s["zam_blad"] = "Wpisz nazwę ćwiczenia."
+        return
+    s["zam_wyb"], s["zam_skad"], s["zam_partia_wyb"], s["zam_krok"] = nazwa, "wlasne", s.get("zam_w_partia_wl"), "cel"
+
+
+def _zamien_na_podobne(nazwa: str) -> None:
+    """Jedno dotknięcie: zamienia bieżące ćwiczenie na wybrane z listy podobnych (jednostka automatycznie, bez celu)."""
+    s = st.session_state
+    s["zam_wyb"], s["zam_jedn"], s["zam_partia_wyb"] = nazwa, "Automatycznie", None
+    for pole in ("serie", "od", "do"):
+        s.pop(f"zam_cel_{pole}", None)
     _zamien_cwiczenie()
 
 
-def _podobne_do_zamiany() -> None:
-    """Propozycje zamiany: ta sama partia, Twój sprzęt (Profil → Moja siłownia), inny sprzęt i ulubione wyżej."""
+def _zam_przyciski_nawigacji(wstecz: str, dalej_etykieta: str, dalej_callback, dalej_wylaczone: bool = False,
+                             nazwa: str = "zam_rzad") -> None:
+    with st.container(key=nazwa):
+        k1, k2 = st.columns(2)
+        k1.button("← Wstecz", use_container_width=True, on_click=_zam_krok, args=(wstecz,), key=f"{nazwa}_wstecz")
+        k2.button(dalej_etykieta, type="primary", use_container_width=True, on_click=dalej_callback,
+                  disabled=dalej_wylaczone, key=f"{nazwa}_dalej")
+
+
+def _zam_start(obecne: str) -> None:
+    st.caption(f"Teraz: {obecne}")
+    with st.container(key="zam_rzad_start"):
+        k1, k2 = st.columns(2)
+        k1.button("Szukaj w bazie", type="primary", use_container_width=True, on_click=_zam_krok, args=("filtry",), key="zam_do_filtrow")
+        k2.button("Własne", use_container_width=True, on_click=_zam_krok, args=("wlasne",), key="zam_do_wlasnego")
+    try:
+        propozycje = baza_cwiczen.podobne(_wszystkie_cwiczenia_bazy(), obecne, profil.dozwolony_sprzet(), set(profil.ulubione()), 4)
+    except sqlite3.Error:
+        propozycje = []
+    if propozycje:
+        ulubione = set(profil.ulubione())
+        st.markdown("**Podobne (dotknij, żeby zamienić)**")
+        for i, c in enumerate(propozycje):
+            st.button(("★ " if c["nazwa"] in ulubione else "") + c["nazwa"] + (f" · {c['sprzet']}" if c["sprzet"] else ""),
+                      key=f"zam_pod_{i}", on_click=_zamien_na_podobne, args=(c["nazwa"],), use_container_width=True)
+
+
+def _zam_filtry() -> None:
+    s = st.session_state
+    wsz = baza_cwiczen.WSZYSTKIE
+    f = s.get("zam_f") or {}
+    lista = _wszystkie_cwiczenia_bazy()
+    if "zam_w_kat" not in s:
+        s["zam_w_kat"] = f.get("kat") or wsz
+    kat = s["zam_w_kat"] if s["zam_w_kat"] in baza_cwiczen.KATEGORIE else None
+    partie, sprzety = baza_cwiczen.partie_i_sprzet(lista, kat)
+    for klucz, pole, dozwolone in (("zam_w_partia", "partia", partie), ("zam_w_sprzet", "sprzet", sprzety)):
+        if klucz not in s:
+            s[klucz] = f.get(pole) or wsz
+        if s[klucz] not in [wsz] + dozwolone:
+            s[klucz] = wsz
+    st.markdown("**Co chcesz znaleźć?**")
+    st.selectbox("Kategoria", [wsz] + list(baza_cwiczen.KATEGORIE), key="zam_w_kat")
+    with st.container(key="zam_rzad_filtry"):
+        k1, k2 = st.columns(2)
+        k1.selectbox("Partia", [wsz] + partie, key="zam_w_partia")
+        k2.selectbox("Sprzęt", [wsz] + sprzety, key="zam_w_sprzet")
+    st.toggle("Pokaż zaawansowane", key="zam_w_zaaw", value=bool(f.get("zaaw")))
+    if profil.dozwolony_sprzet() is not None:
+        st.toggle("Tylko sprzęt z mojej siłowni", key="zam_w_moj", value=bool(f.get("moj", True)))
+    _zam_przyciski_nawigacji("start", "Dalej →", _zam_do_bazy, nazwa="zam_rzad_filtry_nav")
+
+
+def _zam_baza() -> None:
+    s = st.session_state
+    wsz = baza_cwiczen.WSZYSTKIE
+    f = s.get("zam_f") or {}
+    kat = f.get("kat") if f.get("kat") in baza_cwiczen.KATEGORIE else None
+    dozwolony = profil.dozwolony_sprzet()
+    ulubione = set(profil.ulubione())
+    opcje = baza_cwiczen.filtruj(_wszystkie_cwiczenia_bazy(), s.get("zam_szukaj") or "", f.get("partia") or wsz,
+                                 f.get("sprzet") or wsz, bool(f.get("zaaw")), s.get("zam_wyb"), kat,
+                                 dozwolony if dozwolony is not None and f.get("moj", True) else None, ulubione)
+    aktywne = [x for x in (kat, f.get("partia"), f.get("sprzet")) if x and x != wsz]
+    st.caption("Filtry: " + (" · ".join(aktywne) if aktywne else "brak"))
+    st.text_input("Szukaj", key="zam_szukaj", placeholder="Wpisz i naciśnij Enter, np. przysiad, row, lina",
+                  label_visibility="collapsed")
+    sprzet = {c["nazwa"]: c["sprzet"] for c in opcje}
+    if "zam_w_wybor" not in s and s.get("zam_skad") == "baza" and s.get("zam_wyb") in sprzet:
+        s["zam_w_wybor"] = s["zam_wyb"]   # powrót z kroku „cel”: wybór zostaje
+    st.selectbox(f"Ćwiczenie ({len(opcje)})", [c["nazwa"] for c in opcje], index=None, placeholder="Wybierz albo zacznij pisać...",
+                 key="zam_w_wybor", format_func=lambda n: ("★ " if n in ulubione else "") + (f"{n} · {sprzet[n]}" if sprzet.get(n) else n))
+    _zam_przyciski_nawigacji("filtry", "Dalej →", _zam_do_celu_z_bazy, dalej_wylaczone=not s.get("zam_w_wybor"), nazwa="zam_rzad_baza_nav")
+
+
+def _zam_wlasne() -> None:
+    s = st.session_state
+    if s.get("zam_skad") == "wlasne" and "zam_w_nowe" not in s:
+        s["zam_w_nowe"] = s.get("zam_wyb") or ""   # powrót z kroku „cel”: nazwa zostaje
+    st.text_input("Nazwa własnego ćwiczenia", placeholder="np. Przysiad bułgarski", key="zam_w_nowe")
+    partie = lista_partii()
+    st.selectbox("Partia", partie, index=len(partie) - 1, key="zam_w_partia_wl",
+                 help="Do której partii zaliczyć nowe ćwiczenie (liczy się w „Serie na partię” w Postępach).")
+    _zam_przyciski_nawigacji("start", "Dalej →", _zam_do_celu_wlasne, nazwa="zam_rzad_wlasne_nav")
+
+
+def _zam_cel() -> None:
+    s = st.session_state
+    st.markdown("**" + (s.get("zam_wyb") or "").replace("*", "") + "**")
+    st.selectbox("Jednostka", list(JEDNOSTKI_WYBOR), key="zam_jedn",
+                 help="Automatycznie: jak ostatnio zapisywałeś to ćwiczenie, a gdy robisz je pierwszy raz: powtórzenia.")
+    _pola_celu("zam_cel", kompakt=True)
+    with st.container(key="zam_rzad_cel_nav"):
+        k1, k2 = st.columns(2)
+        k1.button("← Wstecz", use_container_width=True, on_click=_zam_krok,
+                  args=("wlasne" if s.get("zam_skad") == "wlasne" else "baza",), key="zam_cel_wstecz")
+        k2.button("Zamień", type="primary", use_container_width=True, on_click=_zamien_cwiczenie, key="zam_cel_zamien",
+                  help="Zapisane już serie zostają przy tym ćwiczeniu.")
+
+
+@st.dialog("Zamień ćwiczenie")
+def _okno_zamiany() -> None:
+    """Okienko zamiany ćwiczenia w kilku krokach. Po zamianie zamyka się samo (st.rerun odświeża całą stronę)."""
+    s = st.session_state
+    if s.pop("zam_zamknij", False):
+        st.rerun()
+    st.markdown(CSS_ZAMIANA, unsafe_allow_html=True)
     stan = _stan()
     if not stan or not stan["cwiczenia"]:
+        st.caption("Brak ćwiczenia do zamiany.")
         return
-    obecne = stan["cwiczenia"][stan["biezace"]]["nazwa"]
-    try:
-        propozycje = baza_cwiczen.podobne(_wszystkie_cwiczenia_bazy(), obecne, profil.dozwolony_sprzet(), set(profil.ulubione()), 6)
-    except sqlite3.Error:
-        return
-    if not propozycje:
-        return
-    ulubione = set(profil.ulubione())
-    st.markdown("**Podobne do tego ćwiczenia**",
-                help="Ta sama partia mięśniowa. Uwzględniamy sprzęt z Profilu (Moja siłownia); inny sprzęt niż w obecnym ćwiczeniu jest wyżej, "
-                     "np. gdy sztanga jest zajęta, dostaniesz hantle albo maszynę. Dotknij, żeby zamienić.")
-    for i, c in enumerate(propozycje):
-        st.button(("★ " if c["nazwa"] in ulubione else "") + c["nazwa"] + (f" · {c['sprzet']}" if c["sprzet"] else ""),
-                  key=f"sesja_pod_{i}", on_click=_zamien_na_podobne, args=(c["nazwa"],), use_container_width=True)
-    st.markdown("**Albo wybierz z bazy**")
+    if "zam_blad" in s:
+        st.error(s.pop("zam_blad"))
+    krok = s.get("zam_krok", "start")
+    if krok == "filtry":
+        _zam_filtry()
+    elif krok == "baza":
+        _zam_baza()
+    elif krok == "wlasne":
+        _zam_wlasne()
+    elif krok == "cel":
+        _zam_cel()
+    else:
+        _zam_start(stan["cwiczenia"][stan["biezace"]]["nazwa"])
 
 
-@st.dialog("Zamień to ćwiczenie")
-def _okno_zamiany() -> None:
-    """Okienko zamiany ćwiczenia. Po zamianie zamyka się samo (st.rerun odświeża całą stronę)."""
-    s = st.session_state
-    if s.pop("sesja_zam_zamknij", False):
-        st.rerun()
-    if "sesja_zam_blad" in s:
-        st.error(s.pop("sesja_zam_blad"))
-    _podobne_do_zamiany()
-    _wybor_z_bazy("sesja_zam")
-    st.text_input("...albo wpisz własne ćwiczenie", placeholder="np. Przysiad bułgarski", key="sesja_zam_nowe")
-    st.selectbox("Partia (tylko dla nowego, własnego ćwiczenia)", lista_partii(), index=len(lista_partii()) - 1, key="sesja_zam_partia",
-                 help="Do której partii mięśniowej zaliczyć nowe ćwiczenie. Dzięki temu liczy się w „Serie na partię” w Postępach. "
-                      "Dla ćwiczenia wybranego z bazy ta wartość jest pomijana.")
-    st.selectbox("Jednostka (w czym liczysz)", list(JEDNOSTKI_WYBOR), key="sesja_zam_jednostka",
-                 help="Automatycznie: jak ostatnio zapisywałeś to ćwiczenie, a gdy robisz je pierwszy raz: powtórzenia.")
-    _pola_celu("sesja_zam")
-    st.button("Zamień", type="primary", use_container_width=True, on_click=_zamien_cwiczenie, key="sesja_zam_btn",
-              help="Zapisane już serie zostają przy tym ćwiczeniu.")
-
-
-# Trzy małe przyciski w jednym rzędzie także na telefonie (Streamlit domyślnie układa kolumny jedna pod drugą).
+# Cztery małe przyciski w jednym rzędzie także na telefonie (Streamlit domyślnie układa kolumny jedna pod drugą).
 CSS_PRZYCISKI_NAV = (
     "<style>"
     ".st-key-sesja_nav [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;gap:10px !important;}"
     ".st-key-sesja_nav [data-testid='stColumn'],.st-key-sesja_nav [data-testid='column']{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}"
     ".st-key-sesja_nav button{min-height:3rem;font-size:1.4rem;font-weight:700;}"
+    ".st-key-sesja_gotowe button:not(:disabled){color:var(--e-zielony);border-color:var(--e-zielony);}"
+    ".st-key-sesja_gotowe [data-testid='stBaseButton-primary']:not(:disabled),.st-key-sesja_gotowe button[kind='primary']:not(:disabled)"
+    "{background:var(--e-zielony);color:var(--e-tlo);border-color:var(--e-zielony);}"
     ".st-key-sesja_cofnij button:not(:disabled){color:var(--e-kasuj);border-color:var(--e-kasuj_ramka);}"
     ".st-key-kafelek_sesja_cw [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;gap:10px !important;}"
     ".st-key-kafelek_sesja_cw [data-testid='stColumn'],.st-key-kafelek_sesja_cw [data-testid='column']{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}"
@@ -1951,37 +2127,19 @@ CSS_PRZYCISKI_NAV = (
 )
 
 
-# RPE w jednym rzędzie: dziesięć małych przycisków, kolor od zielonego (lekko) przez żółty do czerwonego (maksimum).
-# Kolory skali RPE i napisów na nich są w motywy.py (zmienne --e-rpe_N i --e-rpe_t_N, osobne dla motywu jasnego i ciemnego).
+def _klucz_rpe(c: dict, nr: int) -> str:
+    """Klucz rzędu RPE: zmienia się z każdą zapisaną (lub cofniętą) serią, więc nowy rząd startuje pusty."""
+    return f"sesja_rpek_{nr}_{len(c['serie'])}"
 
 
-def _css_rpe() -> str:
-    reguly = [
-        ".st-key-sesja_rpe_rzad [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;gap:3px !important;}",
-        ".st-key-sesja_rpe_rzad [data-testid='stColumn'],.st-key-sesja_rpe_rzad [data-testid='column']"
-        "{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}",
-        ".st-key-sesja_rpe_rzad button{min-height:2.3rem;padding:0 !important;font-size:0.9rem;font-weight:600;"
-        "border-width:2px;background:var(--e-karta);color:var(--e-tekst);}",
-    ]
-    for i in range(1, 11):
-        kolor, tekst = f"var(--e-rpe_{i - 1})", f"var(--e-rpe_t_{i - 1})"
-        reguly.append(f".st-key-sesja_rpe_rzad [class*='st-key-sesja_rpb_{i}_'] button{{border-color:{kolor};}}")
-        reguly.append(f".st-key-sesja_rpe_rzad [class*='st-key-sesja_rpb_{i}_'][class*='_zaznaczone'] button"
-                      f"{{background:{kolor};color:{tekst};border-color:{kolor};}}")
-    return "<style>" + "".join(reguly) + "</style>"
-
-
-CSS_RPE = _css_rpe()
-
-
-def _pole_rpe(nr: int) -> None:
-    aktualne = st.session_state.get(f"sesja_rpe_{nr}")
+def _pole_rpe(c: dict, nr: int) -> None:
+    """RPE 1-10 w jednym rzędzie: własny komponent (komp_ui), bo zwykłe przyciski Streamlita migały i gubiły kolory."""
     st.markdown("<span style='font-size:0.9rem;'>Jak ciężko? RPE (opcjonalnie): 1 lekko, 10 maksimum</span>", unsafe_allow_html=True)
-    with st.container(key="sesja_rpe_rzad"):
-        st.markdown(CSS_RPE, unsafe_allow_html=True)
-        for kol, i in zip(st.columns(len(OPCJE_RPE)), OPCJE_RPE):
-            klucz = f"sesja_rpb_{i}_{nr}" + ("_zaznaczone" if aktualne == i else "")
-            kol.button(str(i), key=klucz, on_click=_ustaw_rpe, args=(nr, i), use_container_width=True)
+    try:
+        motyw = st.context.theme.type
+    except Exception:   # noqa: BLE001 (motyw nieznany: komponent sam sprawdzi ustawienie systemu)
+        motyw = None
+    komp_ui.pole_rpe(st.session_state, _klucz_rpe(c, nr), motyw)
 
 
 def _widok_cwiczenia(stan: dict) -> None:
@@ -2003,7 +2161,7 @@ def _widok_cwiczenia(stan: dict) -> None:
         rozgrzewka = st.toggle("Seria rozgrzewkowa", key=f"sesja_rozgrz_{nr}", on_change=_przelacz_rozgrzewke, args=(nr,),
                                help="Rozgrzewka nie liczy się do planu, objętości ani rekordów i ma krótszą przerwę.")
         if not rozgrzewka:
-            _pole_rpe(nr)
+            _pole_rpe(c, nr)
         st.button("Zapisz serię rozgrzewkową" if rozgrzewka else f"Zapisz serię {len(serie_robocze(c)) + 1}",
                   type="secondary" if rozgrzewka else "primary", use_container_width=True,
                   key=f"sesja_zapisz_{nr}", on_click=_zapisz_serie, args=(nr,))
@@ -2012,20 +2170,25 @@ def _widok_cwiczenia(stan: dict) -> None:
                       key=f"sesja_powtorz_{nr}", on_click=_powtorz_serie, args=(nr,),
                       help="Zapisuje od razu serię identyczną z poprzednią (ciężar, powtórzenia i RPE) i włącza przerwę.")
 
-    zrobione = len(serie_robocze(c)) >= c["serie_plan"]
+    zrobione = cwiczenie_gotowe(c)
     with st.container(key="sesja_nav"):
         st.markdown(CSS_PRZYCISKI_NAV, unsafe_allow_html=True)
-        k_wstecz, k_dalej, k_cofnij = st.columns(3)
+        k_wstecz, k_dalej, k_gotowe, k_cofnij = st.columns(4)
         k_wstecz.button("←", use_container_width=True, disabled=nr == 0, on_click=_przejdz, args=(-1,),
                         key="sesja_wstecz", help="Poprzednie ćwiczenie")
         k_dalej.button("→", use_container_width=True, disabled=nr >= ile - 1,
                        type="primary" if zrobione else "secondary", on_click=_przejdz, args=(1,),
                        key="sesja_dalej", help="Następne ćwiczenie")
+        oznaczone = bool(c.get("gotowe")) and zrobione
+        k_gotowe.button("✓", use_container_width=True, type="primary" if oznaczone else "secondary",
+                        disabled=(zrobione and not oznaczone) or not serie_robocze(c), on_click=_gotowe, args=(nr,),
+                        key="sesja_gotowe", help="Zdejmij oznaczenie" if oznaczone else "Ćwiczenie wykonane (także przy mniejszej liczbie serii niż w planie)")
         k_cofnij.button("↶", use_container_width=True, disabled=not c["serie"], on_click=_cofnij, args=(nr,),
                         key="sesja_cofnij", help="Cofnij ostatnią serię")
     if zrobione and nr < ile - 1:
         st.caption("To ćwiczenie jest wykonane. Przejdź do następnego albo dołóż serię.")
     if st.button("Zamień to ćwiczenie na inne", use_container_width=True, key="sesja_zam_otworz"):
+        _zam_reset()
         _okno_zamiany()
     with st.expander("Notatka do ćwiczenia" + (" (jest)" if wczytaj_notatke(c["nazwa"]) else "")):
         st.text_area("Notatka do ćwiczenia", key=f"sesja_nota_{nr}", height=80, label_visibility="collapsed",

@@ -131,8 +131,9 @@ CSS_SZKLO = """
 
 
 def css_szklo() -> str:
-    """CSS szkła + kolory dla okienek, które Streamlit rysuje poza aplikacją (lista wyboru).
-    Okienko nie leży w `.stApp`, więc nie dziedziczyło ciemnego motywu i wychodziło jasne. Podajemy mu motyw wprost."""
+    """CSS szkła + kolory dla okienek, które Streamlit rysuje poza aplikacją (lista wyboru i okna dialogowe).
+    Okienko nie leży w `.stApp`, więc nie dziedziczyło ciemnego motywu i wychodziło jasne (kolory --e-* to light-dark(),
+    a ten wybiera wariant według color-scheme elementu). Podajemy mu motyw wprost."""
     import streamlit as st
     try:
         motyw = st.context.theme.type
@@ -141,5 +142,7 @@ def css_szklo() -> str:
     schemat = motyw if motyw in ("light", "dark") else "light dark"
     return CSS_SZKLO + (
         "<style>[data-baseweb=\"popover\"], [data-baseweb=\"popover\"] *, [data-testid=\"stSelectboxVirtualDropdown\"], "
-        f"[data-testid=\"stSelectboxVirtualDropdown\"] * {{ color-scheme: {schemat}; }}</style>"
+        "[data-testid=\"stSelectboxVirtualDropdown\"] *, [data-testid=\"stDialog\"], [data-testid=\"stDialog\"] *, "
+        "[role=\"dialog\"], [role=\"dialog\"] *, [data-baseweb=\"modal\"], [data-baseweb=\"modal\"] * "
+        f"{{ color-scheme: {schemat}; }}</style>"
     )

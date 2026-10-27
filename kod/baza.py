@@ -390,19 +390,6 @@ def wczytaj_garmin_rozszerzone(dni: int = 14) -> pd.DataFrame:
     return dane.set_index("Data").sort_index()
 
 
-def wczytaj_garmin_rozszerzone(dni: int = 14) -> pd.DataFrame:
-    """Ostatnie dni z fazami snu i stresem (do kafelków na Start). Indeks: data."""
-    with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
-        dane = pd.read_sql_query(
-            "SELECT Data, Stres, Sen_gleboki, Sen_rem, Sen_lekki, Sen_czuwanie "
-            "FROM garmin_dziennie ORDER BY Data DESC LIMIT ?",
-            db,
-            params=(dni,),
-        )
-    dane["Data"] = pd.to_datetime(dane["Data"])
-    return dane.set_index("Data").sort_index()
-
-
 def wczytaj_wage_do_wykresu() -> pd.DataFrame:
     """Dane do wykresu wagi: tylko z ręcznych wpisów w formularzu."""
     with closing(sqlite3.connect(SCIEZKA_BAZY)) as db:
@@ -505,4 +492,4 @@ def wczytaj_ostatnie_samopoczucie(ile: int = 5) -> pd.DataFrame:
             "SELECT Zapisano, Tekst, Odpowiedz FROM samopoczucie ORDER BY id DESC LIMIT ?",
             db,
             params=(ile,),
-        )
+        )
