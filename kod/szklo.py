@@ -15,7 +15,15 @@ CSS_SZKLO = """
     --sz-baza: color-mix(in srgb, var(--e-kafelek) 84%, transparent);
     --sz-ramka: linear-gradient(100deg, var(--e-g1), var(--e-g2) 55%, var(--e-g3));
     --sz-polysk: inset 0 1px 0 color-mix(in srgb, white 18%, transparent);
-    --sz-cien: 0 8px 24px color-mix(in srgb, var(--e-tytul_glow1) 45%, transparent);
+    --sz-cien: 0 6px 16px -4px color-mix(in srgb, var(--e-tytul_glow1) 55%, transparent);
+    /* Szkło na całej powierzchni przycisku: jaśniejsza górna połowa z miękką krawędzią w połowie wysokości,
+       lekko ciemniejszy dół i równy, delikatny odcień motywu od lewej do prawej (wcześniej mgiełka była tylko w rogach). */
+    --sz-blask: linear-gradient(180deg, light-dark(rgba(255,255,255,.55), rgba(255,255,255,.075)) 0%,
+                light-dark(rgba(255,255,255,.22), rgba(255,255,255,.03)) 46%, transparent 54%,
+                light-dark(rgba(90,65,25,.06), rgba(0,0,0,.18)) 100%);
+    --sz-odcien: linear-gradient(110deg, color-mix(in srgb, var(--e-tytul_glow2) 16%, transparent), color-mix(in srgb, var(--e-tytul_glow3) 16%, transparent));
+    --sz-krawedz: inset 0 1px 0 light-dark(rgba(255,255,255,.7), rgba(255,255,255,.14)), inset 0 -1px 0 light-dark(rgba(90,65,25,.08), rgba(0,0,0,.35));
+    --sz-ruch: transform .16s cubic-bezier(.2,.8,.2,1), box-shadow .2s ease, border-color .2s ease, filter .2s ease, background-color .2s ease;
 }
 
 /* ---------- Wybór kategorii, długości przerw itp. (segmenty i pigułki): osobne szklane pigułki ---------- */
@@ -26,17 +34,17 @@ CSS_SZKLO = """
 [data-testid="stButtonGroup"] [data-variant] {
     border-radius: 999px !important; min-height: 2.6rem !important; padding: 0 1rem !important;
     border: 1.5px solid var(--e-obram2) !important;
-    background: var(--sz-mgla-lekka), var(--sz-baza) !important;
-    box-shadow: var(--sz-polysk) !important; color: var(--e-tekst) !important;
-    transition: border-color .2s ease, box-shadow .2s ease, filter .2s ease, transform .12s ease;
+    background: var(--sz-blask), var(--sz-odcien), var(--sz-baza) !important;
+    box-shadow: var(--sz-krawedz) !important; color: var(--e-tekst) !important;
+    transition: var(--sz-ruch);
 }
 [data-testid="stButtonGroup"] [data-variant] p { font-weight: 600 !important; color: inherit !important; }
 [data-testid="stButtonGroup"] [data-variant]:hover { border-color: var(--e-obram_hover) !important; filter: brightness(1.12); }
 [data-testid="stButtonGroup"] [data-variant]:active { transform: scale(0.97); }
 [data-testid="stButtonGroup"] [data-variant][data-selected] {
     border-color: transparent !important;
-    background: var(--sz-mgla) padding-box, linear-gradient(var(--e-kafelek), var(--e-kafelek)) padding-box, var(--sz-ramka) border-box !important;
-    box-shadow: var(--sz-polysk), var(--sz-cien) !important;
+    background: var(--sz-blask) padding-box, var(--sz-mgla) padding-box, linear-gradient(var(--e-kafelek), var(--e-kafelek)) padding-box, var(--sz-ramka) border-box !important;
+    box-shadow: var(--sz-krawedz), var(--sz-cien) !important;
 }
 [data-testid="stButtonGroup"] [data-variant][data-selected] p { font-weight: 800 !important; }
 
@@ -103,8 +111,12 @@ CSS_SZKLO = """
 .stButton > button[data-testid="stBaseButton-secondary"], [data-testid="stFormSubmitButton"] > button[kind="secondaryFormSubmit"],
 .stDownloadButton > button {
     border: 1.5px solid var(--e-obram2) !important; border-radius: 14px !important;
-    background: var(--sz-mgla-lekka), var(--sz-baza) !important;
-    box-shadow: var(--sz-polysk) !important;
+    background: var(--sz-blask), var(--sz-odcien), var(--sz-baza) !important;
+    box-shadow: var(--sz-krawedz) !important; transition: var(--sz-ruch) !important;
+}
+.stButton > button:active, [data-testid="stFormSubmitButton"] > button:active, .stDownloadButton > button:active,
+[data-testid="stButtonGroup"] [data-variant]:active {
+    transform: scale(0.97) !important; filter: brightness(1.08);
 }
 .stButton > button[data-testid="stBaseButton-secondary"]:hover, .stDownloadButton > button:hover {
     border-color: var(--e-obram_hover) !important; filter: brightness(1.12);
@@ -112,8 +124,11 @@ CSS_SZKLO = """
 .stButton > button[kind="primary"], .stButton > button[data-testid="stBaseButton-primary"],
 [data-testid="stFormSubmitButton"] > button[kind="primaryFormSubmit"] {
     border-radius: 14px !important; border: 1.5px solid color-mix(in srgb, white 22%, var(--e-przycisk)) !important;
-    box-shadow: inset 0 1px 0 color-mix(in srgb, white 38%, transparent), inset 0 -12px 20px rgba(0, 0, 0, 0.14),
-                0 10px 26px color-mix(in srgb, var(--e-przycisk) 38%, transparent) !important;
+    background-image: linear-gradient(180deg, rgba(255,255,255,.20) 0%, rgba(255,255,255,.06) 46%, transparent 54%, rgba(0,0,0,.10) 100%),
+                      var(--e-przycisk-grad) !important;
+    box-shadow: inset 0 1px 0 color-mix(in srgb, white 45%, transparent), inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+                0 8px 18px -6px color-mix(in srgb, var(--e-przycisk) 55%, transparent) !important;
+    transition: var(--sz-ruch) !important;
 }
 
 /* ---------- Karty, formularze, panele, okna ---------- */
@@ -121,6 +136,21 @@ CSS_SZKLO = """
 [class*="st-key-kafelek_"], [class*="st-key-blok_cwiczenia_"] {
     border-width: 1.5px !important; border-radius: 18px !important;
     box-shadow: var(--sz-polysk), 0 8px 22px var(--e-cien_m) !important;
+}
+/* Rozwijane panele: bez ucinania zawartości (ucinanie robiło prostokątne krawędzie poświaty przycisków w środku) */
+[data-testid="stExpander"] { overflow: visible !important; }
+[data-testid="stExpander"] details { border-radius: inherit !important; }
+[data-testid="stExpander"] summary { border-radius: 12px !important; }
+
+/* Płynne pojawianie się: treść okna po zmianie kroku i nowe elementy w oknach */
+@keyframes sz-wejscie { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+[data-testid="stDialog"] [data-testid="stElementContainer"], [data-testid="stDialog"] [data-testid="stLayoutWrapper"],
+[role="dialog"] [data-testid="stElementContainer"] {
+    animation: sz-wejscie .22s cubic-bezier(.2,.8,.2,1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+    [data-testid="stDialog"] [data-testid="stElementContainer"], [role="dialog"] [data-testid="stElementContainer"] { animation: none; }
+    .stButton > button, [data-testid="stButtonGroup"] [data-variant] { transition: none !important; }
 }
 [data-testid="stDialog"] [role="dialog"] {
     border-radius: 22px !important; border: 1.5px solid var(--e-obram2) !important;

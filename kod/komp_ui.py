@@ -123,3 +123,66 @@ def pole_rpe(stan_sesji, klucz: str, motyw: str | None = None) -> int | None:
     przebudowuje ramki. Żeby wyczyścić wybór (np. po zapisie serii), wywołaj z nowym kluczem."""
     _komponent_rpe()(key=klucz, default=None, paleta=paleta_rpe(), motyw=motyw if motyw in ("light", "dark") else "")
     return wartosc_rpe(stan_sesji, klucz)
+
+
+# --- Zegar treningu liczony w telefonie -------------------------------------------------------------------------------
+# Pasek sesji (sesja_treningowa.pasek_sesji_html) ma ukryte dane (.sz-dane) i miejsca na wartości (.sz-czas, .sz-przerwa,
+# .sz-pasek). Ten skrypt działa w niewidocznej ramce i co 250 ms poprawia te wartości na stronie (ramka ma dostęp do strony,
+# tak jak skrypt blokujący przybliżanie). Treść skryptu jest zawsze taka sama, więc Streamlit go nie przeładowuje, a nowy
+# stan (po zapisie serii, +30 s, Pomiń) przychodzi razem z paskiem. Wcześniej serwer odświeżał pasek co sekundę, przez co
+# stuknięcia czekały w kolejce, a strona się zacinała. Zmieniamy tylko tekst i styl istniejących elementów (nie dodajemy
+# ani nie usuwamy węzłów), żeby nie wchodzić w drogę Reactowi, który rysuje stronę Streamlita.
+HTML_ZEGAR = r'''<script>
+(function () {
+  var P, D;
+  try { P = window.parent; D = P.document; } catch (e) { return; }
+  var znak = String(Math.random());
+  P.__struoZegar = znak;
+  var przesuniecia = {};
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s));
+    var g = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+    var mm = (m < 10 ? "0" : "") + m, ss = (x < 10 ? "0" : "") + x;
+    return g ? g + ":" + mm + ":" + ss : mm + ":" + ss;
+  }
+  function tekst(el, t) {
+    if (!el) { return; }
+    var n = el.firstChild;
+    if (n && n.nodeType === 3 && n.nodeValue !== t) { n.nodeValue = t; }
+  }
+  function styl(el, nazwa, wartosc) {
+    if (el && el.style.getPropertyValue(nazwa) !== wartosc) { el.style.setProperty(nazwa, wartosc); }
+  }
+  function jeden(w) {
+    var zrodlo = w.querySelector(".sz-dane");
+    if (!zrodlo) { return; }
+    var surowe = zrodlo.textContent, d;
+    try { d = JSON.parse(surowe); } catch (e) { return; }
+    if (!(surowe in przesuniecia)) { przesuniecia = {}; przesuniecia[surowe] = d.teraz - Date.now(); }
+    var teraz = Date.now() + przesuniecia[surowe];
+    tekst(w.querySelector(".sz-czas"), fmt((teraz - d.start) / 1000));
+    if (d.wyl || d.koniec === null || d.koniec === undefined) { return; }
+    var zostalo = Math.max(0, Math.ceil((d.koniec - teraz) / 1000)), kolor, glowny, proc;
+    if (zostalo > 0) {
+      var dl = Math.max(d.dl || 0, zostalo);
+      kolor = zostalo <= 10 ? d.kolory.czerwony : d.kolory.przerwa;
+      glowny = fmt(zostalo); proc = 100 * zostalo / dl;
+    } else {
+      kolor = d.kolory.zielony; glowny = "Gotowe"; proc = 100;
+    }
+    styl(w, "--zk", kolor);
+    tekst(w.querySelector(".sz-przerwa"), glowny);
+    styl(w.querySelector(".sz-pasek"), "width", (Math.round(proc * 10) / 10) + "%");
+  }
+  var id = setInterval(function () {
+    if (P.__struoZegar !== znak) { clearInterval(id); return; }   // nowsza kopia skryptu przejęła odliczanie
+    try { D.querySelectorAll(".sz-zegar").forEach(jeden); } catch (e) { /* zegar nie może zepsuć strony */ }
+  }, 250);
+})();
+</script>'''
+
+
+def zegar_w_telefonie() -> None:
+    """Niewidoczna ramka ze skryptem odliczającym (pasek sesji musi być na tej samej stronie)."""
+    import streamlit.components.v1 as components
+    components.html(HTML_ZEGAR, height=0)

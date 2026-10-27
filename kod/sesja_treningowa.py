@@ -50,10 +50,12 @@ OPCJE_PRZERWY = {"60 s": 60, "90 s": 90, "2 min": 120, "3 min": 180, "Auto": Non
 
 def rzad_w_jednej_linii(klucz: str) -> None:
     """Rząd przycisków (segmenty, pigułki) o danym kluczu w jednej linii: małe wcięcia, napisy nigdy nie są ucinane
-    (przyciski mają szerokość napisu i rozciągają się na wolne miejsce), a gdy rząd jest za szeroki, przewija się w bok."""
+    (przyciski mają szerokość napisu i rozciągają się na wolne miejsce), a gdy rząd jest za szeroki, przewija się w bok.
+    Margines wewnątrz przewijanego rzędu jest po to, żeby poświata zaznaczonej pigułki mieściła się w nim (inaczej
+    przewijanie ucinało ją w ostry prostokąt)."""
     st.markdown(
         f"<style>.st-key-{klucz} [data-testid='stButtonGroup']{{flex-wrap:nowrap !important;gap:4px !important;"
-        f"overflow-x:auto;scrollbar-width:none;}}"
+        f"overflow-x:auto;scrollbar-width:none;padding:4px 6px 16px 6px !important;margin:-4px -6px -16px -6px !important;}}"
         f".st-key-{klucz} [data-testid='stButtonGroup']::-webkit-scrollbar{{display:none;}}"
         f".st-key-{klucz} button{{padding:0.3rem 0.45rem !important;min-height:0 !important;white-space:nowrap;"
         f"flex:1 0 auto !important;overflow:visible !important;}}"
@@ -1186,65 +1188,58 @@ def naglowek_sesji_html(stan: dict) -> str:
     ))
 
 
+def _epoka_ms(t: datetime) -> int:
+    return int(t.timestamp() * 1000)
+
+
+def stan_zegara(stan: dict, teraz: datetime) -> dict:
+    """Dane, z których telefon sam odlicza czas treningu i przerwę (komp_ui.zegar_w_telefonie)."""
+    zrobione, plan = postep(stan)
+    return {
+        "teraz": _epoka_ms(teraz), "start": _epoka_ms(datetime.fromisoformat(stan["start"])),
+        "koniec": _epoka_ms(datetime.fromisoformat(stan["przerwa_do"])) if stan.get("przerwa_do") else None,
+        "dl": int(stan.get("przerwa_dl") or 0), "wyl": przerwy_wylaczone(stan), "zrobione": zrobione, "plan": plan,
+        "kolory": {"przerwa": KOLOR_PRZERWY, "czerwony": CZERWONY, "zielony": ZIELONY},
+    }
+
+
 def pasek_sesji_html(stan: dict, teraz: datetime) -> str:
-    """Cienki pasek przypięty do góry ekranu: czas treningu, przerwa i postęp serii."""
+    """Cienki pasek przypięty do góry ekranu: czas treningu, przerwa i postęp serii.
+    Wartości na chwilę `teraz`; dalej odlicza je sam telefon (klasy sz-… i dane w ukrytym sz-dane), bez pytania serwera."""
     zrobione, plan = postep(stan)
     zostalo = przerwa_pozostalo(stan, teraz)
     if przerwy_wylaczone(stan):
-        kolor, glowny, opis = KOLOR_PRZYGASZONY, "wyłączona", "Przerwa"
-        pasek = _pasek(100 * zrobione / plan if plan else 0, ZIELONY, 6)
+        kolor, glowny, proc = KOLOR_PRZYGASZONY, "wyłączona", 100 * zrobione / plan if plan else 0
     elif zostalo is None:
-        kolor, glowny, opis = NIEBIESKI, "–", "Przerwa"
-        pasek = _pasek(100 * zrobione / plan if plan else 0, ZIELONY, 6)
+        kolor, glowny, proc = NIEBIESKI, "–", 100 * zrobione / plan if plan else 0
     elif zostalo > 0:
         dl = max(int(stan.get("przerwa_dl") or 0), zostalo)
         kolor = CZERWONY if zostalo <= 10 else KOLOR_PRZERWY
-        glowny, opis = format_czasu(zostalo), "Przerwa"
-        pasek = _pasek(100 * zostalo / dl, kolor, 6)
+        glowny, proc = format_czasu(zostalo), 100 * zostalo / dl
     else:
-        kolor, glowny, opis = ZIELONY, "Gotowe", "Przerwa"
-        pasek = _pasek(100, ZIELONY, 6)
+        kolor, glowny, proc = ZIELONY, "Gotowe", 100
+    pasek_kolor = "var(--zk)" if zostalo is not None and not przerwy_wylaczone(stan) else ZIELONY
 
-    def kolumna(podpis: str, wartosc: str, kol: str, flex: str, rozmiar: str = "1.35rem") -> str:
+    def kolumna(podpis: str, wartosc: str, kol: str, flex: str, rozmiar: str = "1.35rem", klasa: str = "") -> str:
         # Stała wysokość wiersza z wartością, żeby podpisy nad liczbami były na tej samej wysokości mimo różnych rozmiarów liczb
         return (f'<div style="flex:{flex};min-width:0;text-align:center;line-height:1.15;">'
                 f'<div style="font-size:0.7rem;color:{KOLOR_PRZYGASZONY};">{podpis}</div>'
-                f'<div style="display:flex;align-items:center;justify-content:center;height:1.9rem;font-size:{rozmiar};'
-                f'font-weight:700;color:{kol};white-space:nowrap;">{wartosc}</div></div>')
+                f'<div class="{klasa}" style="display:flex;align-items:center;justify-content:center;height:1.9rem;font-size:{rozmiar};'
+                f'font-weight:700;color:{kol};white-space:nowrap;font-variant-numeric:tabular-nums;">{wartosc}</div></div>')
 
     czas = format_czasu(czas_trwania(stan, teraz).total_seconds())
-    return '<div style="margin-bottom:10px;">' + _ramka(kolor, (
-        '<div style="display:flex;align-items:flex-start;gap:8px;">'
-        + kolumna("Czas treningu", czas, KOLOR_TEKSTU, "1")
-        + kolumna(opis, glowny, kolor, "1.3", "1.6rem" if glowny != "wyłączona" else "1rem")
-        + kolumna("Serie", f"{zrobione}/{plan}", KOLOR_SERII, "1")
-        + f'</div><div style="margin-top:6px;">{pasek}</div>'
-    ), "8px 12px") + '</div>'
-
-
-def licznik_html(stan: dict, teraz: datetime) -> str:
-    """Czas treningu po lewej, odliczanie przerwy po prawej."""
-    zostalo = przerwa_pozostalo(stan, teraz)
-    if zostalo is None:
-        kolor, glowny, opis, proc = NIEBIESKI, "–", "po zapisaniu serii ruszy odliczanie", 0
-    elif zostalo > 0:
-        dl = max(int(stan.get("przerwa_dl") or 0), zostalo)
-        kolor = CZERWONY if zostalo <= 10 else KOLOR_PRZERWY
-        glowny, opis, proc = format_czasu(zostalo), "do kolejnej serii", 100 * zostalo / dl
-    else:
-        kolor, glowny, opis, proc = ZIELONY, "Gotowe", "możesz robić kolejną serię", 100
-    return _ramka(kolor, (
-        f'<div style="display:flex;align-items:stretch;gap:16px;">'
-        f'<div style="flex:1;min-width:0;text-align:center;">'
-        f'<div style="font-size:0.8rem;color:{KOLOR_PRZYGASZONY};">Czas treningu</div>'
-        f'<div style="font-size:1.9rem;font-weight:700;color:{KOLOR_TEKSTU};">{format_czasu(czas_trwania(stan, teraz).total_seconds())}</div></div>'
-        f'<div style="width:1px;background:{KOLOR_OBRAMOWANIA};"></div>'
-        f'<div style="flex:1.4;min-width:0;text-align:center;">'
-        f'<div style="font-size:0.8rem;color:{KOLOR_PRZYGASZONY};">Przerwa</div>'
-        f'<div style="font-size:1.9rem;font-weight:700;color:{kolor};">{glowny}</div>'
-        f'<div style="font-size:0.75rem;color:{KOLOR_PRZYGASZONY};margin:0 0 6px 0;">{opis}</div>'
-        f'{_pasek(proc, kolor, 6)}</div></div>'
-    ), "12px 18px")
+    pasek = (f'<div style="height:6px;border-radius:6px;background:{KOLOR_TLA_PIERSCIENIA};overflow:hidden;">'
+             f'<div class="sz-pasek" style="width:{max(0.0, min(100.0, proc)):.1f}%;height:100%;background:{pasek_kolor};'
+             f'border-radius:6px;transition:width .25s linear;"></div></div>')
+    dane = html.escape(json.dumps(stan_zegara(stan, teraz), separators=(",", ":")), quote=False)
+    return (f'<div class="sz-zegar" style="margin-bottom:10px;--zk:{kolor};">'
+            f'<span class="sz-dane" style="display:none;">{dane}</span>' + _ramka("var(--zk)", (
+                '<div style="display:flex;align-items:flex-start;gap:8px;">'
+                + kolumna("Czas treningu", czas, KOLOR_TEKSTU, "1", klasa="sz-czas")
+                + kolumna("Przerwa", glowny, "var(--zk)", "1.3", "1.6rem" if glowny != "wyłączona" else "1rem", klasa="sz-przerwa")
+                + kolumna("Serie", f"{zrobione}/{plan}", KOLOR_SERII, "1")
+                + f'</div><div style="margin-top:6px;">{pasek}</div>'
+            ), "8px 12px") + '</div>')
 
 
 def _chip(tekst: str) -> str:
@@ -1752,9 +1747,10 @@ def _zakoncz_i_zapisz() -> None:
 
 
 # --- widoki ----------------------------------------------------------------
-@st.fragment(run_every=1)
+@st.fragment
 def _licznik() -> None:
-    """Pasek z czasem i przerwą. Odświeża się co sekundę tylko ten fragment, reszta strony stoi w miejscu."""
+    """Pasek z czasem i przerwą. Sekundy odlicza sam telefon (komp_ui.zegar_w_telefonie), serwer nie jest pytany co sekundę.
+    Fragment przerysowuje się tylko po swoich przyciskach (+30 s, Pomiń, Przerwy) albo razem ze stroną."""
     stan = st.session_state.get("sesja_stan")
     if not stan:
         return
@@ -1768,9 +1764,6 @@ def _licznik() -> None:
     k3.button("Przerwy wył." if wylaczone else "Przerwy wł.", key="sesja_przerwy_przel", on_click=_przelacz_przerwy,
               use_container_width=True, type="primary" if wylaczone else "secondary",
               help="Jedno stuknięcie wyłącza lub włącza odliczanie przerw w tym treningu.")
-    if zostalo == 0 and st.session_state.get("sesja_toast") != stan["przerwa_do"]:
-        st.session_state["sesja_toast"] = stan["przerwa_do"]
-        st.toast("Koniec przerwy. Czas na kolejną serię.")
 
 
 # Pasek z czasem i przerwą przypięty do góry ekranu. Nagłówek Streamlita (z logo) na telefonie dostaje tło, żeby nie
@@ -1786,6 +1779,7 @@ CSS_PASEK = (
     ".st-key-sesja_pasek [data-testid='stColumn'],.st-key-sesja_pasek [data-testid='column']"
     "{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}"
     ".st-key-sesja_pasek button{min-height:2.4rem;padding:0 0.3rem;font-size:0.9rem;}"
+    ".st-key-sesja_zegar_js,[data-testid='stLayoutWrapper']:has(> .st-key-sesja_zegar_js){display:none !important;}"
     "@media (max-width:768px){[data-testid='stHeader']{background:var(--e-naglowek) !important;"
     "-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);}}"
     "</style>"
@@ -2262,6 +2256,8 @@ def widok_sesji() -> None:
     st.markdown(CSS_PASEK, unsafe_allow_html=True)
     with st.container(key="sesja_pasek"):
         _licznik()
+    with st.container(key="sesja_zegar_js"):   # niewidoczny skrypt odliczający w telefonie (zawsze ta sama treść: bez przeładowań)
+        komp_ui.zegar_w_telefonie()
     if stan["cwiczenia"]:
         st.session_state["sesja_skok"] = stan["biezace"]
         st.pills("Ćwiczenia", list(range(len(stan["cwiczenia"]))), format_func=lambda i: _nazwa_pigulki(stan, i),
