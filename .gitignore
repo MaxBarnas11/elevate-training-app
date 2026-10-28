@@ -44,3 +44,5 @@ goscie.txt
 *-journal
 *.db-wal
 *.db-shm
+
+narzedzia/wynik_*.txt
