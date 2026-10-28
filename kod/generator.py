@@ -178,9 +178,45 @@ def _punkty(c: dict, slot_typ: str | None, cel: str, poziom: str) -> float:
     return pkt
 
 
-def _klucz_ruchu(nazwa: str) -> str:
-    """Pierwsze dwa słowa nazwy (bez polskich znaków): ogranicza powtarzanie prawie tego samego ruchu."""
-    return " ".join(_norma(nazwa).split()[:2])
+# Rodziny ruchów: żeby w jednym treningu nie było trzech wiosłowań albo dwóch prawie takich samych uginań na modlitewniku.
+RODZINY_SPECJALNE = (
+    (re.compile(r"(przysiad bulgar|wykrok|zakrok|wejsci|split)"), "wykrok"),
+    (re.compile(r"(martwy|rumunsk)"), "martwy"),
+    (re.compile(r"(hip thrust|most biodr|unoszenie bioder)"), "hip"),
+    (re.compile(r"(sciaganie|podciaganie)"), "pion"),
+    (re.compile(r"(rozpiet|krzyzowanie|butterfly)"), "rozpietki"),
+)
+GRUPY_DUZE = ("Nogi", "Plecy", "Klatka", "Pośladki")       # tu rodzina = pierwsze słowo nazwy; w małych partiach dwa słowa
+PARTIA_GRUPA = {p: g for g, partie in GRUPY.items() for p in partie}
+WAGA_GRUPY = {"Nogi": 3, "Plecy": 3, "Klatka": 3, "Pośladki": 2, "Barki": 2, "Biceps": 1.5, "Triceps": 1.5, "Brzuch": 1.5, "Łydki": 1}
+MIN_NA_CWICZENIE = 7.5                    # średnio, do wstępnego podziału (dokładny czas liczy szacunek_minut)
+
+
+def _rodziny(c: dict) -> set[str]:
+    """Rodziny ruchu ćwiczenia (z grupą partii). Dwa ćwiczenia z tej samej rodziny to „prawie to samo”."""
+    n = _norma(c["nazwa"])
+    grupa = PARTIA_GRUPA.get(c["partia"], c["partia"])
+    slowa = n.split()
+    wynik = {"2:" + " ".join(slowa[:2])}                    # te same dwa pierwsze słowa: zawsze najwyżej raz
+    spec = next((r for wz, r in RODZINY_SPECJALNE if wz.search(n)), None)
+    if spec:
+        wynik.add(f"{spec}|{grupa}")
+    elif grupa in GRUPY_DUZE:
+        wynik.add(f"{slowa[0] if slowa else ''}|{grupa}")
+    else:
+        wynik.add(f"{' '.join(slowa[:2])}|{c['partia']}")
+    if "modlitewnik" in n:
+        wynik.add("modlitewnik")
+    return wynik
+
+
+def _zajete(c: dict, rodziny: dict, limit: int) -> bool:
+    return any(rodziny.get(r, 0) >= (1 if r.startswith("2:") else limit) for r in _rodziny(c))
+
+
+def _dodaj_rodziny(c: dict, rodziny: dict) -> None:
+    for r in _rodziny(c):
+        rodziny[r] = rodziny.get(r, 0) + 1
 
 
 def _dozwolone(c: dict, u: Ustawienia) -> bool:
@@ -189,15 +225,17 @@ def _dozwolone(c: dict, u: Ustawienia) -> bool:
     return u.dozwolony is None or c["sprzet"] in u.dozwolony
 
 
-def _kandydaci(lista: list[dict], poziomy: dict, partie: tuple, slot_typ: str | None, u: Ustawienia, uzyte: set, klucze: set) -> list[dict]:
-    """Ćwiczenia pasujące do slotu, od najlepszego. Ulubione są tu pomijane: dobieramy je osobno (limit na trening)."""
+def _kandydaci(lista: list[dict], poziomy: dict, partie: tuple, slot_typ: str | None, u: Ustawienia, uzyte: set,
+               rodziny: dict, limit: int = 1) -> list[dict]:
+    """Ćwiczenia pasujące do slotu, od najlepszego. Ulubione są tu pomijane: dobieramy je osobno (limit na trening).
+    `limit`: ile ćwiczeń z jednej rodziny ruchu może być w treningu."""
     wynik = []
     for c in lista:
         if c["nazwa"] in uzyte or c["nazwa"] in u.ulubione or c["partia"] not in partie or not _dozwolone(c, u):
             continue
         if slot_typ is not None and rodzaj_ruchu(c) != slot_typ:
             continue
-        if _klucz_ruchu(c["nazwa"]) in klucze:
+        if _zajete(c, rodziny, limit):
             continue
         wynik.append((_punkty(c, slot_typ, u.cel, poziomy.get(c["nazwa"], "")), c))
     wynik.sort(key=lambda x: (-x[0], x[1]["nazwa"]))
@@ -205,35 +243,52 @@ def _kandydaci(lista: list[dict], poziomy: dict, partie: tuple, slot_typ: str | 
 
 
 def _wybierz(kand: list[dict], przesuniecie: int) -> tuple[dict | None, str]:
-    """Wybiera ćwiczenie z listy kandydatów: sprawdzone (robione wcześniej) mają pierwszeństwo. Przesunięcie 0 bierze najlepsze,
-    większe bierze kolejne (spośród trzech najlepszych). Zwraca (ćwiczenie, powód)."""
+    """Wybiera ćwiczenie z listy kandydatów: sprawdzone (robione wcześniej) idą pierwsze, za nimi pozostałe od najlepszego.
+    Przesunięcie 0 bierze pierwsze, większe kolejne (spośród czterech najlepszych). Zwraca (ćwiczenie, powód)."""
     if not kand:
         return None, ""
-    znane = [c for c in kand if c["uzycia"] > 0]
-    pula = znane or kand
-    c = pula[przesuniecie % min(3, len(pula))]
+    pula = [c for c in kand if c["uzycia"] > 0] + [c for c in kand if c["uzycia"] == 0]
+    c = pula[przesuniecie % min(4, len(pula))]
     return c, ("już to robiłeś" if c["uzycia"] > 0 else "podstawowe ćwiczenie")
+
+
+def podzial_cwiczen(grupy: list[str], czas: int) -> dict[str, int]:
+    """Ile ćwiczeń dostaje każda wybrana grupa. Każda co najmniej jedno, reszta według wagi grupy (duże partie więcej).
+    Razem tyle, ile mieści się w czasie, ale nie więcej niż MAX_CWICZEN."""
+    n = min(MAX_CWICZEN.get(czas, 7), round((czas * LUZ_CZASU - NARZUT_MIN) / MIN_NA_CWICZENIE))
+    ile = {g: 1 for g in grupy}
+    while sum(ile.values()) < n:
+        mozliwe = [g for g in grupy if ile[g] < len(SLOTY_GRUPY[g])]
+        if not mozliwe:
+            break
+        g = max(mozliwe, key=lambda g: (WAGA_GRUPY.get(g, 1) / ile[g], -grupy.index(g)))
+        ile[g] += 1
+    return ile
 
 
 def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: list[str], poziom: int = 0, seria: int = 0) -> dict:
     """Układa jeden trening. Zwraca {nazwa, opis, pozycje, minuty, uwagi, poziom}. Te same argumenty dają zawsze ten sam wynik.
-    Poziom 0: układ podstawowy. Poziom 1: zmienione jedno ćwiczenie główne albo ulubione, reszta jak w poziomie 0. Poziom 2: to samo
-    i dodatkowo 2–3 inne ćwiczenia (więcej nowości). `seria` przesuwa wszystkie wybory naraz (przycisk „Ułóż inne”)."""
+    Poziom 0: układ podstawowy. Poziom 1: zmienione jedno ćwiczenie główne albo ulubione i jedno inne. Poziom 2: dodatkowo
+    kolejne zmiany i jedno nowe ćwiczenie więcej. `seria` przesuwa wszystkie wybory naraz (przycisk „Ułóż inne”)."""
     grupy = [g for g in GRUPY if g in grupy]                 # kolejność od dużych partii do małych
     wszystkie_partie = {p for g in grupy for p in GRUPY[g]}
     uwagi: list[str] = []
+    ile_w_grupie = podzial_cwiczen(grupy, u.czas)
 
-    # sloty: najpierw po jednym na grupę, potem drugie itd.
+    # sloty: każda grupa dostaje tyle, ile wyszło z podziału (najpierw po jednym na grupę, potem drugie itd.)
     sloty: list[dict] = []
-    for poziom_slotu in range(max((len(SLOTY_GRUPY[g]) for g in grupy), default=0)):
+    for poziom_slotu in range(max(ile_w_grupie.values(), default=0)):
         for g in grupy:
-            if poziom_slotu < len(SLOTY_GRUPY[g]):
+            if poziom_slotu < ile_w_grupie[g]:
                 partie_slotu, typ_slotu = SLOTY_GRUPY[g][poziom_slotu]
                 sloty.append({"grupa": g, "partie": partie_slotu, "typ": typ_slotu, "c": None, "etykieta": "", "powod": ""})
 
     po_nazwie = {c["nazwa"]: c for c in lista}
     uzyte: set[str] = set()
-    klucze: set[str] = set()
+    rodziny: dict[str, int] = {}
+
+    def limit_dla(g: str) -> int:
+        return 2 if len(grupy) == 1 and ile_w_grupie.get(g, 0) >= 4 else 1   # dwa podobne ruchy tylko przy jednej partii
 
     # 1) ulubione: najwyżej dwa, z wybranych partii, ze sprzętem, który masz; kolejne warianty biorą inne
     ulub = sorted(n for n in u.ulubione if n in po_nazwie and po_nazwie[n]["partia"] in wszystkie_partie
@@ -243,7 +298,7 @@ def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: 
         kolejnosc = ulub[start:] + ulub[:start]
         wybrane, grupy_uzyte = [], set()
         for n in kolejnosc:                                   # najpierw z różnych grup
-            g = next(g for g in grupy if po_nazwie[n]["partia"] in GRUPY[g])
+            g = PARTIA_GRUPA[po_nazwie[n]["partia"]]
             if g not in grupy_uzyte and len(wybrane) < LIMIT_ULUBIONYCH:
                 wybrane.append(n)
                 grupy_uzyte.add(g)
@@ -252,7 +307,7 @@ def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: 
                 wybrane.append(n)
         for n in wybrane:
             c = po_nazwie[n]
-            g = next(g for g in grupy if c["partia"] in GRUPY[g])
+            g = PARTIA_GRUPA[c["partia"]]
             ruch = rodzaj_ruchu(c)
             wolne_g = [s for s in sloty if s["grupa"] == g and s["c"] is None]
             slot = (next((s for s in wolne_g if c["partia"] in s["partie"] and s["typ"] in (None, ruch)), None)
@@ -262,45 +317,54 @@ def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: 
                 sloty.append(slot)
             slot.update(c=c, etykieta="ulubione", powod="ulubione", typ=ruch if ruch else slot["typ"])
             uzyte.add(n)
-            klucze.add(_klucz_ruchu(n))
+            _dodaj_rodziny(c, rodziny)
 
-    # przesunięcia wyboru: seria przesuwa wszystko; poziom 1 zmienia jedno ćwiczenie główne (gdy ulubione nie mają z czego się zmienić),
-    # poziom 2 dodatkowo do trzech innych ćwiczeń
+    # przesunięcia wyboru: seria przesuwa wszystko; poziom 1 zmienia ćwiczenie główne i jedno inne,
+    # poziom 2 dodatkowo do trzech kolejnych
     for s in sloty:
         s["off"] = seria
-    zmiana = None
     wolne_po_ulubionych = [s for s in sloty if s["c"] is None]
-    if poziom >= 1 and not (len(ulub) > LIMIT_ULUBIONYCH):
+    zmienione: list[dict] = []
+    if poziom >= 1:
         glowne = [s for s in wolne_po_ulubionych if s["typ"] == W] or wolne_po_ulubionych
-        if glowne:
-            zmiana = glowne[min(1, len(glowne) - 1)]
-            zmiana["off"] += 1
+        if glowne and not (len(ulub) > LIMIT_ULUBIONYCH):
+            zmienione.append(glowne[min(1, len(glowne) - 1)])
+        zmienione += [x for x in reversed(wolne_po_ulubionych) if x not in zmienione][:1]
     if poziom >= 2:
-        for s in [x for x in reversed(wolne_po_ulubionych) if x is not zmiana][:3]:
-            s["off"] += 1
+        zmienione += [x for x in wolne_po_ulubionych if x not in zmienione][:3]
+    for s in zmienione:
+        s["off"] += 1
 
-    # 2) nowe: 1–2 ćwiczenia, których jeszcze nie robiłeś (izolacje i małe partie, nie ciężkie podstawowe)
+    # 2) nowe: ćwiczenia, których jeszcze nie robiłeś (izolacje i małe partie, nie ciężkie podstawowe); w różnych grupach
     wolne = [s for s in sloty if s["c"] is None]
-    ile_nowych = 1 if len(sloty) <= 4 else 2
+    ile_nowych = (1 if len(sloty) <= 4 else 2) + (1 if poziom >= 2 and len(sloty) >= 5 else 0)
     kolejnosc_nowych = [s for s in reversed(wolne) if s["typ"] != W] + [s for s in reversed(wolne) if s["typ"] == W]
-    for s in kolejnosc_nowych:
-        if sum(1 for x in sloty if x["etykieta"] == "nowe") >= ile_nowych:
-            break
-        kand = [c for c in _kandydaci(lista, poziomy, s["partie"], s["typ"], u, uzyte, klucze) if c["uzycia"] == 0]
-        if not kand:
-            continue
-        c = kand[s["off"] % min(5, len(kand))]
-        s.update(c=c, etykieta="nowe", powod="nowe, jeszcze tego nie robiłeś: na rozwój")
-        uzyte.add(c["nazwa"])
-        klucze.add(_klucz_ruchu(c["nazwa"]))
+    grupy_nowych: set[str] = set()
+    for runda in (0, 1):                                     # najpierw po jednym w grupie, potem dowolnie
+        for s in kolejnosc_nowych:
+            if sum(1 for x in sloty if x["etykieta"] == "nowe") >= ile_nowych:
+                break
+            if s["c"] is not None or (runda == 0 and s["grupa"] in grupy_nowych):
+                continue
+            kand = [c for c in _kandydaci(lista, poziomy, s["partie"], s["typ"], u, uzyte, rodziny, limit_dla(s["grupa"]))
+                    if c["uzycia"] == 0]
+            if not kand:
+                continue
+            c = kand[s["off"] % min(5, len(kand))]
+            s.update(c=c, etykieta="nowe", powod="nowe, jeszcze tego nie robiłeś: na rozwój")
+            uzyte.add(c["nazwa"])
+            _dodaj_rodziny(c, rodziny)
+            grupy_nowych.add(s["grupa"])
 
-    # 3) reszta: sprawdzone, podstawowe ćwiczenia (wielostawowe na początek)
+    # 3) reszta: sprawdzone, podstawowe ćwiczenia; gdy brak kandydata, szukamy szerzej (cała grupa, potem luźniejszy limit rodzin)
     for s in sloty:
         if s["c"] is not None:
             continue
-        kand = _kandydaci(lista, poziomy, s["partie"], s["typ"], u, uzyte, klucze)
-        if not kand and s["typ"] is not None:     # slot izolacji bez kandydata: spróbuj szerzej w obrębie grupy
-            kand = _kandydaci(lista, poziomy, GRUPY[s["grupa"]], s["typ"], u, uzyte, klucze)
+        lim = limit_dla(s["grupa"])
+        kand = (_kandydaci(lista, poziomy, s["partie"], s["typ"], u, uzyte, rodziny, lim)
+                or (s["typ"] is not None and _kandydaci(lista, poziomy, GRUPY[s["grupa"]], s["typ"], u, uzyte, rodziny, lim))
+                or _kandydaci(lista, poziomy, GRUPY[s["grupa"]], None, u, uzyte, rodziny, lim)
+                or _kandydaci(lista, poziomy, GRUPY[s["grupa"]], None, u, uzyte, rodziny, lim + 1))
         if not kand:
             continue
         c, powod = _wybierz(kand, s["off"])
@@ -308,15 +372,14 @@ def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: 
             continue
         s.update(c=c, powod=powod if s["typ"] != W else ("wielostawowe, na początek" if c["uzycia"] == 0 else powod))
         uzyte.add(c["nazwa"])
-        klucze.add(_klucz_ruchu(c["nazwa"]))
+        _dodaj_rodziny(c, rodziny)
     for g in grupy:
         if not any(s["c"] is not None and s["grupa"] == g for s in sloty):
             uwagi.append(f"Brak ćwiczeń na „{g}” przy sprzęcie z Twojej siłowni.")
 
-    # kolejność: wielostawowe najpierw (ulubione zostają na swoich miejscach w obrębie grup)
+    # pozycje: wielostawowe najpierw (to one są „rdzeniem”, którego skracanie nie rusza)
     wypelnione = [s for s in sloty if s["c"] is not None]
     wypelnione.sort(key=lambda s: 0 if (s["typ"] == W or rodzaj_ruchu(s["c"]) == W) else 1)
-
     pozycje: list[Pozycja] = []
     wielo = 0
     for s in wypelnione:
@@ -325,7 +388,7 @@ def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: 
         serie, od, do, jedn = _schemat(u.cel, typ, wielo, c["partia"], c.get("jednostka") or "powt.")
         if typ == W:
             wielo += 1
-        alt_kand = _kandydaci(lista, poziomy, s["partie"], s["typ"], u, uzyte - {c["nazwa"]}, set())
+        alt_kand = _kandydaci(lista, poziomy, s["partie"], s["typ"], u, uzyte - {c["nazwa"]}, {}, 99)
         alt = next((x["nazwa"] for x in alt_kand if x["sprzet"] != c["sprzet"]), "") or (alt_kand[0]["nazwa"] if alt_kand else "")
         pozycje.append(Pozycja(c["nazwa"], c["partia"], c["typ"] or "", typ, serie, od, do, jedn, s["etykieta"], [s["powod"]],
                                alt, chroniona=(s["etykieta"] == "ulubione"), rdzen=(typ == W and wielo <= RDZEN)))
@@ -334,52 +397,109 @@ def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: 
     for p in pozycje:
         if p.slot_typ == W and p.jednostka != "min" and p.serie == 3 and szacunek_minut(pozycje, u.cel) + _minuty(p, u.cel) / 3 <= u.czas:
             p.serie = 4
+    pozycje = przeplec(pozycje)
     return {"nazwa": "Na dziś: " + ", ".join(grupy), "opis": ", ".join(g.lower() for g in grupy), "pozycje": pozycje,
             "minuty": szacunek_minut(pozycje, u.cel), "uwagi": uwagi, "poziom": poziom, "seria": seria}
 
 
+def przeplec(pozycje: list[Pozycja]) -> list[Pozycja]:
+    """Kolejność treningu: wielostawowe przed izolacjami, ale ta sama partia nie idzie dwa razy z rzędu (np. czworogłowe,
+    dwugłowe, pośladki, brzuch, znowu czworogłowe), a gdy się da, także nie co drugie ćwiczenie. Prawie takie same ruchy
+    też nie stoją obok siebie. Gdy wybrana jest jedna partia, zostaje tylko rozdzielenie podobnych ruchów."""
+    reszta = list(pozycje)
+    wynik: list[Pozycja] = []
+    while reszta:
+        ostatnie = [p.partia for p in wynik[-2:]]
+        rodzina_ost = _rodziny({"nazwa": wynik[-1].nazwa, "partia": wynik[-1].partia}) if wynik else set()
+
+        def ocena(ip, ostatnie=ostatnie, rodzina_ost=rodzina_ost):
+            i, p = ip
+            kara = 0
+            if ostatnie and p.partia == ostatnie[-1]:
+                kara += 4
+            elif p.partia in ostatnie:
+                kara += 1
+            if rodzina_ost & _rodziny({"nazwa": p.nazwa, "partia": p.partia}):
+                kara += 3
+            pozostale = sum(1 for x in reszta if x.partia == p.partia)
+            return (kara >= 3, 0 if p.slot_typ == W else 1, kara, -pozostale, i)
+
+        _, wybrana = min(enumerate(reszta), key=ocena)
+        reszta.remove(wybrana)
+        wynik.append(wybrana)
+    # poprawka: gdy na końcu zostały dwie takie same partie obok siebie, przenosimy jedną tam, gdzie nie ma sąsiada z tej partii
+    for _ in range(len(wynik)):
+        i = next((i for i in range(1, len(wynik)) if wynik[i].partia == wynik[i - 1].partia), None)
+        if i is None:
+            break
+        p = wynik.pop(i)
+        miejsca = [j for j in range(1, len(wynik) + 1)
+                   if wynik[j - 1].partia != p.partia and (j == len(wynik) or wynik[j].partia != p.partia)
+                   and (p.slot_typ != W or j <= len(wynik))]
+        if not miejsca:
+            wynik.insert(i, p)
+            break
+        wynik.insert(min(miejsca, key=lambda j: abs(j - i)), p)
+    return wynik
+
+
 def _przytnij(pozycje: list[Pozycja], u: Ustawienia, uwagi: list[str]) -> None:
-    """Skraca trening do podanego czasu. Kolejność: znikają zwykłe ćwiczenia z końca, potem serie do trzech, potem nowe ćwiczenia,
-    serie do dwóch i dodatkowe ćwiczenia z rdzenia (zostaje co najmniej jedno). Ulubionych czas nigdy nie usuwa."""
+    """Skraca trening do czasu (z luzem) i limitu ćwiczeń. Kolejność: zwykłe ćwiczenia, potem serie do trzech, nowe ćwiczenia,
+    serie do dwóch i dodatkowe ćwiczenia główne. Usuwa zawsze z grupy, która ma najwięcej ćwiczeń względem swojej wagi,
+    i nigdy ostatniego ćwiczenia grupy (wybrane partie zostają). Ulubionych czas nigdy nie usuwa."""
+    limit = MAX_CWICZEN.get(u.czas, 7)
+
+    def grupa(p: Pozycja) -> str:
+        return PARTIA_GRUPA.get(p.partia, p.partia)
+
+    def do_usuniecia(etykieta: str, chron_rdzen: bool) -> Pozycja | None:
+        liczby: dict[str, int] = {}
+        for p in pozycje:
+            liczby[grupa(p)] = liczby.get(grupa(p), 0) + 1
+        kand = [(liczby[grupa(p)] / WAGA_GRUPY.get(grupa(p), 1), i, p) for i, p in enumerate(pozycje)
+                if p.etykieta == etykieta and not (chron_rdzen and p.rdzen) and liczby[grupa(p)] > 1]
+        return max(kand, key=lambda x: (x[0], x[1]))[2] if kand else None
+
     def dluga(minimum: int):
         return max((p for p in pozycje if p.etykieta != "ulubione" and p.serie > minimum and p.jednostka != "min"),
                    key=lambda p: p.serie, default=None)
 
-    limit = MAX_CWICZEN.get(u.czas, 7)
-
-    def za_duzo() -> bool:
-        return szacunek_minut(pozycje, u.cel) > u.czas * LUZ_CZASU or len(pozycje) > limit
-
-    while za_duzo():
-        ofiara = next((p for p in reversed(pozycje) if p.etykieta == "" and not p.rdzen), None)
-        if ofiara is not None:
-            pozycje.remove(ofiara)
-            continue
-        if (p := dluga(3)) is not None:
-            p.serie -= 1
-            continue
-        ofiara = next((p for p in reversed(pozycje) if p.etykieta == "nowe"), None)
-        if ofiara is not None:
-            pozycje.remove(ofiara)
-            continue
-        if (p := dluga(2)) is not None:
-            p.serie -= 1
-            continue
-        zwykle = [p for p in pozycje if p.etykieta == ""]
-        if len(zwykle) > 1:
-            pozycje.remove(zwykle[-1])
-            continue
-        if szacunek_minut(pozycje, u.cel) <= u.czas * LUZ_CZASU:
+    while True:
+        za_dlugo = szacunek_minut(pozycje, u.cel) > u.czas * LUZ_CZASU
+        if not za_dlugo and len(pozycje) <= limit:
             return
-        uwagi.append(f"Ulubione ćwiczenia nie mieszczą się w {u.czas} min (wychodzi ok. {szacunek_minut(pozycje, u.cel)} min); "
-                     "zostawiłem je, bo są ważniejsze niż czas.")
+        if (p := do_usuniecia("", True)) is not None:
+            pozycje.remove(p)
+            continue
+        if za_dlugo and (p := dluga(3)) is not None:
+            p.serie -= 1
+            continue
+        if (p := do_usuniecia("nowe", False)) is not None:
+            pozycje.remove(p)
+            continue
+        if za_dlugo and (p := dluga(2)) is not None:
+            p.serie -= 1
+            continue
+        if (p := do_usuniecia("", False)) is not None:
+            pozycje.remove(p)
+            continue
+        if len(pozycje) > limit:                          # więcej partii niż ćwiczeń, które mieszczą się w czasie
+            zwykle = [p for p in pozycje if p.etykieta != "ulubione"]
+            if zwykle:
+                p = min(reversed(zwykle), key=lambda p: WAGA_GRUPY.get(grupa(p), 1))
+                pozycje.remove(p)
+                uwagi.append(f"Za dużo partii na {u.czas} min: pominąłem „{grupa(p)}”.")
+                continue
+        if za_dlugo:
+            uwagi.append(f"Ulubione ćwiczenia nie mieszczą się w {u.czas} min (wychodzi ok. {szacunek_minut(pozycje, u.cel)} min); "
+                         "zostawiłem je, bo są ważniejsze niż czas.")
         return
 
 
 OPISY_POZIOMOW = (
     "Układ podstawowy: ulubione, kilka nowych i sprawdzone ćwiczenia.",
-    "To samo, ale z innym ćwiczeniem głównym albo ulubionym.",
-    "Więcej nowości: dodatkowo kilka innych ćwiczeń na zmianę.",
+    "To samo, ale z innym ćwiczeniem głównym albo ulubionym i jeszcze jedną zmianą.",
+    "Więcej nowości: kilka innych ćwiczeń i jedno nowe więcej.",
 )
 
 
