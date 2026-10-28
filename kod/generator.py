@@ -21,9 +21,10 @@ from dataclasses import dataclass, field
 import streamlit as st
 
 W, I = "Wielostawowe", "Izolowane"        # typ ćwiczenia (jak w bazie ćwiczeń)
-CZASY = (30, 45, 60, 90)                  # minuty
+CZASY = (30, 45, 60, 75, 90, 120)         # minuty (cały trening, razem z rozgrzewką i schłodzeniem)
 CZAS_DOMYSLNY = 60
-NARZUT_MIN = 5                            # rozgrzewka i przygotowanie, w minutach
+NARZUT_MIN = 15                           # rozgrzewka i schłodzenie, w minutach (nie wpisujemy ich w trening, ale zajmują czas)
+ZAPAS_PRZERW = 1.1                        # dłuższe przerwy niż w tabelce: dolicza ok. 10% do czasu serii
 LIMIT_ULUBIONYCH = 2
 WYKLUCZONE_RODZAJE = {"Plyometria", "Strongman", "Olimpijskie", "Cardio"}   # nie wchodzą do zwykłych slotów
 
@@ -45,13 +46,14 @@ GRUPY = {
 # Kolejne ćwiczenia w grupie: (partie, typ). Typ: wielostawowe, potem izolacje (None = obojętne, np. małe partie).
 _PL = GRUPY["Plecy"]
 SLOTY_GRUPY = {
-    "Nogi": [(("Czworogłowe",), W), (("Dwugłowe uda",), W), (("Czworogłowe",), I), (("Dwugłowe uda",), I), (GRUPY["Nogi"], I)],
-    "Plecy": [(("Plecy szerokie",), W), (("Plecy górne",), W), (_PL, I), (_PL, W), (_PL, I)],
-    "Klatka": [(("Klatka",), W), (("Klatka",), I), (("Klatka",), W), (("Klatka",), I), (("Klatka",), I)],
-    "Barki": [(("Barki przód",), W), (("Barki bok",), I), (("Barki tył",), I), (("Barki bok",), I)],
-    "Pośladki": [(("Pośladki",), W), (("Pośladki",), I), (("Pośladki",), I), (("Pośladki",), I)],
-    "Biceps": [(("Biceps",), None)] * 4, "Triceps": [(("Triceps",), None)] * 4,
-    "Brzuch": [(("Brzuch",), None)] * 4, "Łydki": [(("Łydki",), None)] * 3,
+    "Nogi": [(("Czworogłowe",), W), (("Dwugłowe uda",), W), (("Czworogłowe",), I), (("Dwugłowe uda",), I), (GRUPY["Nogi"], W),
+             (("Czworogłowe",), I), (("Dwugłowe uda",), I)],
+    "Plecy": [(("Plecy szerokie",), W), (("Plecy górne",), W), (_PL, I), (_PL, W), (_PL, I), (_PL, W), (_PL, I)],
+    "Klatka": [(("Klatka",), W), (("Klatka",), I), (("Klatka",), W), (("Klatka",), I), (("Klatka",), W), (("Klatka",), I), (("Klatka",), I)],
+    "Barki": [(("Barki przód",), W), (("Barki bok",), I), (("Barki tył",), I), (("Barki bok",), I), (("Barki przód",), W), (("Barki tył",), I)],
+    "Pośladki": [(("Pośladki",), W), (("Pośladki",), I), (("Pośladki",), I), (("Pośladki",), W), (("Pośladki",), I)],
+    "Biceps": [(("Biceps",), None)] * 5, "Triceps": [(("Triceps",), None)] * 5,
+    "Brzuch": [(("Brzuch",), None)] * 5, "Łydki": [(("Łydki",), None)] * 4,
 }
 RDZEN = 3                                 # tyle pierwszych wielostawowych nie wypadnie przy skracaniu do czasu
 
@@ -141,7 +143,7 @@ def _minuty(p: Pozycja, cel: str) -> float:
         na_serie = 3.5 if ciezko else 2.3 if krotko else 3.0
     else:
         na_serie = 2.5 if ciezko else 1.6 if krotko else 2.0
-    return p.serie * na_serie
+    return p.serie * na_serie * ZAPAS_PRZERW
 
 
 def szacunek_minut(pozycje: list[Pozycja], cel: str) -> int:
@@ -200,20 +202,21 @@ def _kandydaci(lista: list[dict], poziomy: dict, partie: tuple, slot_typ: str | 
     return [c for _, c in wynik]
 
 
-def _wybierz(kand: list[dict], wariant: int, pierwszy: bool, znane_najpierw: bool = True) -> tuple[dict | None, str]:
-    """Wybiera ćwiczenie z listy kandydatów. Wariant 0 bierze najlepsze, kolejne warianty przesuwają wybór (poza pierwszym
-    ćwiczeniem grupy, żeby podstawa treningu była ta sama). Zwraca (ćwiczenie, powód)."""
+def _wybierz(kand: list[dict], przesuniecie: int) -> tuple[dict | None, str]:
+    """Wybiera ćwiczenie z listy kandydatów: sprawdzone (robione wcześniej) mają pierwszeństwo. Przesunięcie 0 bierze najlepsze,
+    większe bierze kolejne (spośród trzech najlepszych). Zwraca (ćwiczenie, powód)."""
     if not kand:
         return None, ""
-    znane = [c for c in kand if c["uzycia"] > 0] if znane_najpierw else []
+    znane = [c for c in kand if c["uzycia"] > 0]
     pula = znane or kand
-    idx = 0 if pierwszy else wariant % min(3, len(pula))
-    c = pula[idx]
+    c = pula[przesuniecie % min(3, len(pula))]
     return c, ("już to robiłeś" if c["uzycia"] > 0 else "podstawowe ćwiczenie")
 
 
-def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: list[str], wariant: int = 0) -> dict:
-    """Układa jeden trening. Zwraca {nazwa, opis, pozycje, minuty, uwagi}. Ten sam wariant daje zawsze ten sam wynik."""
+def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: list[str], poziom: int = 0, seria: int = 0) -> dict:
+    """Układa jeden trening. Zwraca {nazwa, opis, pozycje, minuty, uwagi, poziom}. Te same argumenty dają zawsze ten sam wynik.
+    Poziom 0: układ podstawowy. Poziom 1: zmienione jedno ćwiczenie główne albo ulubione, reszta jak w poziomie 0. Poziom 2: to samo
+    i dodatkowo 2–3 inne ćwiczenia (więcej nowości). `seria` przesuwa wszystkie wybory naraz (przycisk „Ułóż inne”)."""
     grupy = [g for g in GRUPY if g in grupy]                 # kolejność od dużych partii do małych
     wszystkie_partie = {p for g in grupy for p in GRUPY[g]}
     uwagi: list[str] = []
@@ -234,7 +237,7 @@ def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: 
     ulub = sorted(n for n in u.ulubione if n in po_nazwie and po_nazwie[n]["partia"] in wszystkie_partie
                   and not po_nazwie[n]["ukryte"] and (u.dozwolony is None or po_nazwie[n]["sprzet"] in u.dozwolony))
     if ulub:
-        start = wariant % len(ulub)
+        start = ((1 if poziom >= 1 and len(ulub) > LIMIT_ULUBIONYCH else 0) + seria) % len(ulub)
         kolejnosc = ulub[start:] + ulub[:start]
         wybrane, grupy_uzyte = [], set()
         for n in kolejnosc:                                   # najpierw z różnych grup
@@ -259,34 +262,46 @@ def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: 
             uzyte.add(n)
             klucze.add(_klucz_ruchu(n))
 
+    # przesunięcia wyboru: seria przesuwa wszystko; poziom 1 zmienia jedno ćwiczenie główne (gdy ulubione nie mają z czego się zmienić),
+    # poziom 2 dodatkowo do trzech innych ćwiczeń
+    for s in sloty:
+        s["off"] = seria
+    zmiana = None
+    wolne_po_ulubionych = [s for s in sloty if s["c"] is None]
+    if poziom >= 1 and not (len(ulub) > LIMIT_ULUBIONYCH):
+        glowne = [s for s in wolne_po_ulubionych if s["typ"] == W] or wolne_po_ulubionych
+        if glowne:
+            zmiana = glowne[min(1, len(glowne) - 1)]
+            zmiana["off"] += 1
+    if poziom >= 2:
+        for s in [x for x in reversed(wolne_po_ulubionych) if x is not zmiana][:3]:
+            s["off"] += 1
+
     # 2) nowe: 1–2 ćwiczenia, których jeszcze nie robiłeś (izolacje i małe partie, nie ciężkie podstawowe)
     wolne = [s for s in sloty if s["c"] is None]
     ile_nowych = 1 if len(sloty) <= 4 else 2
     kolejnosc_nowych = [s for s in reversed(wolne) if s["typ"] != W] + [s for s in reversed(wolne) if s["typ"] == W]
-    for i, s in enumerate(kolejnosc_nowych):
+    for s in kolejnosc_nowych:
         if sum(1 for x in sloty if x["etykieta"] == "nowe") >= ile_nowych:
             break
         kand = [c for c in _kandydaci(lista, poziomy, s["partie"], s["typ"], u, uzyte, klucze) if c["uzycia"] == 0]
         if not kand:
             continue
-        c = kand[(wariant + i) % min(5, len(kand))]
+        c = kand[s["off"] % min(5, len(kand))]
         s.update(c=c, etykieta="nowe", powod="nowe, jeszcze tego nie robiłeś: na rozwój")
         uzyte.add(c["nazwa"])
         klucze.add(_klucz_ruchu(c["nazwa"]))
 
     # 3) reszta: sprawdzone, podstawowe ćwiczenia (wielostawowe na początek)
-    pierwsze_w_grupie: set[str] = set()
     for s in sloty:
         if s["c"] is not None:
-            pierwsze_w_grupie.add(s["grupa"])
             continue
         kand = _kandydaci(lista, poziomy, s["partie"], s["typ"], u, uzyte, klucze)
         if not kand and s["typ"] is not None:     # slot izolacji bez kandydata: spróbuj szerzej w obrębie grupy
             kand = _kandydaci(lista, poziomy, GRUPY[s["grupa"]], s["typ"], u, uzyte, klucze)
         if not kand:
             continue
-        c, powod = _wybierz(kand, wariant, pierwszy=s["grupa"] not in pierwsze_w_grupie)
-        pierwsze_w_grupie.add(s["grupa"])
+        c, powod = _wybierz(kand, s["off"])
         if c is None:
             continue
         s.update(c=c, powod=powod if s["typ"] != W else ("wielostawowe, na początek" if c["uzycia"] == 0 else powod))
@@ -314,7 +329,7 @@ def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: 
                                alt, chroniona=(s["etykieta"] == "ulubione"), rdzen=(typ == W and wielo <= RDZEN)))
     _przytnij(pozycje, u, uwagi)
     return {"nazwa": "Na dziś: " + ", ".join(grupy), "opis": ", ".join(g.lower() for g in grupy), "pozycje": pozycje,
-            "minuty": szacunek_minut(pozycje, u.cel), "uwagi": uwagi, "wariant": wariant}
+            "minuty": szacunek_minut(pozycje, u.cel), "uwagi": uwagi, "poziom": poziom, "seria": seria}
 
 
 def _przytnij(pozycje: list[Pozycja], u: Ustawienia, uwagi: list[str]) -> None:
@@ -348,21 +363,27 @@ def _przytnij(pozycje: list[Pozycja], u: Ustawienia, uwagi: list[str]) -> None:
         return
 
 
+OPISY_POZIOMOW = (
+    "Układ podstawowy: ulubione, kilka nowych i sprawdzone ćwiczenia.",
+    "To samo, ale z innym ćwiczeniem głównym albo ulubionym.",
+    "Więcej nowości: dodatkowo kilka innych ćwiczeń na zmianę.",
+)
+
+
 def trzy_warianty(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: list[str], seria: int = 0) -> list[dict]:
-    """Trzy różne treningi. `seria` 0 daje pierwsze trzy, kolejne dają inne (przycisk „Ułóż inne”). Powtórki są pomijane."""
+    """Trzy treningi o rosnącej odmienności: podstawowy, z jedną zmianą głównego/ulubionego i z kilkoma dodatkowymi zmianami.
+    `seria` 0 daje pierwszą trójkę, kolejne dają inne (przycisk „Ułóż inne”). Gdy dwa treningi wyszłyby takie same, bierzemy kolejny wybór."""
     wyniki: list[dict] = []
     widziane: set[frozenset] = set()
-    wariant = seria * 3
-    for _ in range(12):
-        t = uloz_dzis(lista, poziomy, u, grupy, wariant)
-        wariant += 1
-        klucz = frozenset(p.nazwa for p in t["pozycje"])
-        if not t["pozycje"] or klucz in widziane:
-            continue
-        widziane.add(klucz)
-        wyniki.append(t)
-        if len(wyniki) == 3:
-            break
+    for poziom in range(3):
+        for dod in range(4):
+            t = uloz_dzis(lista, poziomy, u, grupy, poziom, seria * 4 + dod)
+            klucz = frozenset(p.nazwa for p in t["pozycje"])
+            if t["pozycje"] and klucz not in widziane:
+                widziane.add(klucz)
+                t["poziom"] = len(wyniki)
+                wyniki.append(t)
+                break
     return wyniki
 
 
@@ -380,7 +401,7 @@ def pasujacy_preset(lista: list[dict], presety: list[dict], grupy: list[str], cz
         w_wybranych = [c for c in cw if partia.get(c["nazwa"]) in wybrane]
         udzial = len(w_wybranych) / len(cw)
         pokrycie = len({partia[c["nazwa"]] for c in w_wybranych}) / len(wybrane)
-        minuty = NARZUT_MIN + sum((c.get("serie") or 3) * 2.7 for c in cw)
+        minuty = NARZUT_MIN + sum((c.get("serie") or 3) * 2.7 * ZAPAS_PRZERW for c in cw)
         if udzial < 0.75 or pokrycie < 0.5 or minuty > czas * 1.25:
             continue
         punkty = udzial + pokrycie + (0.05 if p.get("kategoria") == "Własne" else 0)
@@ -605,8 +626,9 @@ def _krok_wybor() -> None:
     st.markdown("**Co dziś trenujesz?**")
     _wiersz_przyciskow("partie", list(GRUPY), lambda g: g in (s.get("gen_grupy") or []), _przelacz_grupe, kolumn=3)
     st.markdown("**Ile masz czasu?**")
-    _wiersz_przyciskow("czas", list(CZASY), lambda m: m == s.get("gen_czas"), _ustaw_czas, ptaszek=False)
-    st.caption("Użyję Twoich ulubionych ćwiczeń i sprzętu z „Mojej siłowni”, dołożę kilka nowych dla rozwoju.")
+    _wiersz_przyciskow("czas", list(CZASY), lambda m: m == s.get("gen_czas"), _ustaw_czas, kolumn=3, ptaszek=False)
+    st.caption(f"Czas to cały trening, razem z ok. {NARZUT_MIN} min rozgrzewki i schłodzenia. Użyję Twoich ulubionych ćwiczeń i sprzętu "
+               "z „Mojej siłowni”, dołożę kilka nowych dla rozwoju.")
     st.button("Ułóż trening", type="primary", use_container_width=True, on_click=_uloz, key="gen_dalej",
               disabled=not s.get("gen_grupy"))
 
@@ -647,7 +669,8 @@ def _krok_wynik() -> None:
                 st.markdown(f"<div class='gen-poz'><span class='n'>{i}.</span><span><b>{html.escape(c['nazwa'])}</b></span></div>",
                             unsafe_allow_html=True)
         elif trening is not None:
-            st.markdown(f"**Propozycja {idx + 1 - (1 if preset else 0)}** · ok. {trening['minuty']} min")
+            st.markdown(f"**Propozycja {idx + 1 - (1 if preset else 0)}** · ok. {trening['minuty']} min z rozgrzewką")
+            st.caption(OPISY_POZIOMOW[min(int(trening.get("poziom", 0)), len(OPISY_POZIOMOW) - 1)])
             st.markdown("".join(_html_pozycji(i, p) for i, p in enumerate(trening["pozycje"], start=1)), unsafe_allow_html=True)
             for uw in trening["uwagi"]:
                 st.caption(uw)
@@ -691,8 +714,10 @@ def okno_generatora() -> None:
 
 
 def przycisk_generatora() -> None:
-    """Przycisk „Ułóż trening na dziś” (strona Treningi). Otwiera okno w krokach."""
-    if st.button("Ułóż trening na dziś", use_container_width=True, key="gen_otworz",
+    """Przycisk „Ułóż trening na dziś” (strona Treningi): duży, w kolorach głównego przycisku, żeby było go widać. Otwiera okno w krokach."""
+    st.markdown("<style>.st-key-gen_otworz button{min-height:3.4rem;}.st-key-gen_otworz button p{font-size:1.1rem !important;font-weight:800;"
+                "letter-spacing:.02em;}</style>", unsafe_allow_html=True)
+    if st.button("✦ Ułóż trening na dziś", use_container_width=True, key="gen_otworz", type="primary",
                  help="Wybierasz partie i czas, a aplikacja proponuje trzy treningi z Twoich ulubionych ćwiczeń, nowych i sprawdzonych."):
         _reset()
         okno_generatora()
