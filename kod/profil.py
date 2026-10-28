@@ -36,7 +36,7 @@ MAKS_PIKSELI_ZDJECIA = 40_000_000
 
 SPRZET_ZAWSZE = ("Masa ciała",)    # sprzęt, który „masz” zawsze (własne ciało); nie trzeba go zaznaczać
 # „Typowa siłownia”: zestaw sprzętu większości klubów sieciowych; punkt wyjścia do poprawienia ręcznie
-SPRZET_TYPOWY = ("Hantle", "Wyciąg", "Sztanga", "Sztanga łamana", "Maszyna", "Maszyna cardio", "Suwnica Smitha",
+SPRZET_TYPOWY = ("Hantle", "Wyciąg", "Sztanga", "Sztanga łamana", "Talerz", "Maszyna", "Maszyna cardio", "Suwnica Smitha",
                  "Kettlebell", "Guma", "Piłka gimnastyczna", "Piłka lekarska")
 
 # Tabele z danymi użytkownika, które zostają przy usuwaniu (to baza ćwiczeń i listy systemowe, nie dane osobowe)
@@ -55,6 +55,7 @@ def _polacz() -> sqlite3.Connection:
     db.execute("CREATE TABLE IF NOT EXISTS profil (Klucz TEXT PRIMARY KEY, Wartosc TEXT)")
     db.execute("CREATE TABLE IF NOT EXISTS profil_zdjecie (id INTEGER PRIMARY KEY CHECK (id = 1), Dane BLOB NOT NULL, Zapisano TEXT)")
     db.execute("CREATE TABLE IF NOT EXISTS profil_sprzet (Sprzet TEXT PRIMARY KEY)")
+    db.execute("CREATE TABLE IF NOT EXISTS profil_maszyny (Maszyna TEXT PRIMARY KEY)")
     db.execute("CREATE TABLE IF NOT EXISTS ulubione_cwiczenia (Nazwa TEXT PRIMARY KEY, Dodano TEXT)")
     return db
 
@@ -326,13 +327,29 @@ def zapisz_sprzet(lista: list[str]) -> None:
         db.commit()
 
 
-def dozwolony_sprzet(wybrany: list[str] | None = None) -> set[str] | None:
-    """Zbiór nazw sprzętu, który masz (z „Masą ciała” i ćwiczeniami bez określonego sprzętu); None = nie filtruj
-    (nic nie zaznaczono, więc zakładamy, że możesz wszystko)."""
+def maszyny_wybrane() -> list[str]:
+    """Konkretne maszyny, które masz (id z katalogu w maszyny.py)."""
+    with closing(_polacz()) as db:
+        return [w[0] for w in db.execute("SELECT Maszyna FROM profil_maszyny ORDER BY Maszyna")]
+
+
+def zapisz_maszyny(lista: list[str]) -> None:
+    import maszyny
+    with closing(_polacz()) as db:
+        db.execute("DELETE FROM profil_maszyny")
+        db.executemany("INSERT OR IGNORE INTO profil_maszyny (Maszyna) VALUES (?)",
+                       [(m,) for m in dict.fromkeys(lista) if m in maszyny.PO_ID])
+        db.commit()
+
+
+def dozwolony_sprzet(wybrany: list[str] | None = None, maszyny_lista: list[str] | None = None) -> set[str] | None:
+    """Zbiór nazw sprzętu, który masz (z „Masą ciała” i ćwiczeniami bez określonego sprzętu), uzupełniony o zaznaczone maszyny
+    (zob. maszyny.dostepne); None = nie filtruj (nic nie zaznaczono, więc zakładamy, że możesz wszystko)."""
+    import maszyny
     wybrany = sprzet_wybrany() if wybrany is None else wybrany
-    if not wybrany:
-        return None
-    return set(wybrany) | set(SPRZET_ZAWSZE) | {""}
+    maszyny_lista = maszyny_wybrane() if maszyny_lista is None else maszyny_lista
+    sprzet = set(wybrany) | set(SPRZET_ZAWSZE) | {""} if wybrany else None
+    return maszyny.zbior_dozwolony(sprzet, maszyny_lista)
 
 
 def ulubione() -> list[str]:
@@ -395,7 +412,8 @@ def eksport_zip() -> bytes:
             z.writestr("zdjecie_profilowe.jpg", bytes(foto[0]))
             opis.append("zdjecie_profilowe.jpg")
         z.writestr("profil.json", json.dumps({**{k: (v.isoformat() if isinstance(v, date) else v) for k, v in wczytaj().items()},
-                                              "sprzet": sprzet_wybrany(), "ulubione": ulubione()}, ensure_ascii=False, indent=2))
+                                              "sprzet": sprzet_wybrany(), "maszyny": maszyny_wybrane(),
+                                              "ulubione": ulubione()}, ensure_ascii=False, indent=2))
         z.writestr("OPIS.txt", "\n".join(opis) + "\n")
     return bufor.getvalue()
 
@@ -949,9 +967,12 @@ def widok_profilu() -> None:
         a.button("Typowa siłownia", use_container_width=True, key="pr_typowy", on_click=_typowy_sprzet,
                  help="Zaznacza sprzęt, który ma większość klubów sieciowych (sztangi, hantle, wyciągi, maszyny, kettlebell, guma, piłki). Potem możesz poprawić.")
         b.button("Wyczyść", use_container_width=True, key="pr_czysc_sprzet", on_click=_wyczysc_sprzet)
+        import maszyny
+        import maszyny_ui
+        maszyny_ui.sekcja_w_profilu()
         lista = [c for c in _wszystkie_cwiczenia() if not c["ukryte"]]
         dozw = dozwolony_sprzet(list(s.get("pr_sprzet") or []))
-        dostepnych = sum(1 for c in lista if dozw is None or c["sprzet"] in dozw)
+        dostepnych = sum(1 for c in lista if maszyny.dostepne(c, dozw))
         st.markdown(f"<div class='pr-kafle'><div class='pr-kafel'><div class='pr-kafel-et'>Ćwiczeń do wyboru</div>"
                     f"<div class='pr-kafel-w'>{dostepnych} <small>z {len(lista)}</small></div></div></div>", unsafe_allow_html=True)
         nazwy = {c["nazwa"]: c["sprzet"] for c in lista}

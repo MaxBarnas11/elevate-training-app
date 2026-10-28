@@ -1897,8 +1897,8 @@ def _wybor_z_filtrami(prefiks: str) -> None:
     partie, sprzety = baza_cwiczen.partie_i_sprzet(lista, kat)
     st.selectbox("Kategoria", [wsz] + list(baza_cwiczen.KATEGORIE), key=f"{prefiks}_f_kat",
                  help="Zawęża listę: pchanie (klatka, barki, triceps), ciągnięcie (plecy, biceps), nogi, brzuch, cardio i skoki.")
-    st.text_input("Szukaj w bazie", placeholder="np. przysiad, wyciąg, lina, row...", key=f"{prefiks}_szukaj",
-                  help="Szuka po polsku i po angielsku w nazwie, sprzęcie i partii.")
+    st.text_input("Szukaj w bazie", placeholder="np. przysiad, suwnica, hack, lina, row...", key=f"{prefiks}_szukaj",
+                  help="Szuka po polsku i po angielsku w nazwie, sprzęcie, maszynie (np. suwnica, butterfly, wyciąg górny) i partii.")
     if s.get(f"{prefiks}_f_partia") not in [wsz] + partie:
         s[f"{prefiks}_f_partia"] = wsz
     if s.get(f"{prefiks}_f_sprzet") not in [wsz] + sprzety:
@@ -1917,7 +1917,7 @@ def _wybor_z_filtrami(prefiks: str) -> None:
     opcje = baza_cwiczen.filtruj(lista, s.get(f"{prefiks}_szukaj") or "", s.get(f"{prefiks}_f_partia") or wsz,
                                  s.get(f"{prefiks}_f_sprzet") or wsz, bool(s.get(f"{prefiks}_f_zaaw")), wybrane, kat,
                                  dozwolony if dozwolony is not None and s.get(f"{prefiks}_f_moj", True) else None, ulubione)
-    sprzet = {c["nazwa"]: c["sprzet"] for c in opcje}
+    sprzet = {c["nazwa"]: c.get("opis_sprzetu") or c["sprzet"] for c in opcje}
     st.selectbox(f"Ćwiczenie z bazy ({len(opcje)})", [c["nazwa"] for c in opcje], index=None,
                  placeholder="Wybierz z listy...", key=f"{prefiks}_wybor",
                  format_func=lambda n: ("★ " if n in ulubione else "") + (f"{n} · {sprzet[n]}" if sprzet.get(n) else n))
@@ -2059,7 +2059,7 @@ def _zam_baza() -> None:
     st.caption("Filtry: " + (" · ".join(aktywne) if aktywne else "brak"))
     st.text_input("Szukaj", key="zam_szukaj", placeholder="Wpisz i naciśnij Enter, np. przysiad, row, lina",
                   label_visibility="collapsed")
-    sprzet = {c["nazwa"]: c["sprzet"] for c in opcje}
+    sprzet = {c["nazwa"]: c.get("opis_sprzetu") or c["sprzet"] for c in opcje}
     if "zam_w_wybor" not in s and s.get("zam_skad") == "baza" and s.get("zam_wyb") in sprzet:
         s["zam_w_wybor"] = s["zam_wyb"]   # powrót z kroku „cel”: wybór zostaje
     st.selectbox(f"Ćwiczenie ({len(opcje)})", [c["nazwa"] for c in opcje], index=None, placeholder="Wybierz albo zacznij pisać...",

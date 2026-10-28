@@ -104,6 +104,9 @@ def przygotuj(db: sqlite3.Connection, sciezka_bazy: Path | None = None) -> None:
         db.execute("INSERT OR REPLACE INTO ustawienia (Klucz, Wartosc) VALUES (?, '1')", (FLAGA,))
     _odkryj_uzywane(db)
     _podziel_plecy_i_barki(db, sciezka_bazy)
+    import korekty_cwiczen
+    if korekty_cwiczen.zastosuj(db, sciezka_bazy):
+        _odkryj_uzywane(db)          # ukrycie dziwnych ćwiczeń nie dotyczy tych, które już robisz
 
 
 def _podziel_plecy_i_barki(db: sqlite3.Connection, sciezka_bazy: Path | None) -> None:
@@ -139,11 +142,13 @@ def _rdzen(slowo: str) -> str:
 
 
 def wszystkie(db: sqlite3.Connection) -> list[dict]:
-    """Wszystkie ćwiczenia z bazy jako słowniki (nazwa, partia, dodatkowe, sprzęt, typ, ukryte, tekst do szukania)."""
+    """Wszystkie ćwiczenia z bazy jako słowniki (nazwa, partia, dodatkowe, sprzęt, typ, ukryte, tekst do szukania, maszyny).
+    `maszyny`: konkretne maszyny, na których zrobisz ćwiczenie (moduł maszyny); `opis_sprzetu`: nazwa maszyny albo rodzaj sprzętu."""
+    import maszyny
     kolumny = {w[1] for w in db.execute("PRAGMA table_info(cwiczenia)")}
     if "Sprzet" not in kolumny:
         return [{"nazwa": n, "partia": p or "Inne", "dod": "", "sprzet": "", "rodzaj": "", "typ": "", "ukryte": 0,
-                 "szukaj": _norma(n), "uzycia": 0}
+                 "szukaj": _norma(n), "uzycia": 0, "maszyny": (), "opis_sprzetu": ""}
                 for (n, p) in db.execute("SELECT Nazwa, Partia FROM cwiczenia ORDER BY rowid")]
     aliasy: dict[str, list[str]] = {}
     try:
@@ -160,9 +165,12 @@ def wszystkie(db: sqlite3.Connection) -> list[dict]:
     wynik = []
     for n, p, dod, sp, rodz, typ, uk in db.execute(
             "SELECT Nazwa, Partia, Partia_dod, Sprzet, Rodzaj, Typ, Ukryte FROM cwiczenia ORDER BY rowid"):
-        tekst = " ".join([_norma(n), *aliasy.get(n, []), _norma(sp or ""), _norma(p or "")])
+        ids = maszyny.maszyny_cwiczenia(n, sp or "", " ".join(aliasy.get(n, [])))
+        tekst = " ".join([_norma(n), *aliasy.get(n, []), _norma(sp or ""), _norma(p or ""), maszyny.tekst_do_szukania(ids)])
+        opis = maszyny.PO_ID[ids[0]].nazwa if len(ids) == 1 else (sp or "")
         wynik.append({"nazwa": n, "partia": p or "Inne", "dod": dod or "", "sprzet": sp or "", "rodzaj": rodz or "",
-                      "typ": typ or "", "ukryte": int(uk or 0), "szukaj": tekst, "uzycia": uzycia.get(n, 0)})
+                      "typ": typ or "", "ukryte": int(uk or 0), "szukaj": tekst, "uzycia": uzycia.get(n, 0),
+                      "maszyny": ids, "opis_sprzetu": opis})
     return wynik
 
 
@@ -170,7 +178,9 @@ def filtruj(lista: list[dict], szukaj: str = "", partia: str = WSZYSTKIE, sprzet
             zaawansowane: bool = False, zachowaj: str | None = None, kategoria: str | None = None,
             dozwolony_sprzet: set[str] | None = None, ulubione: set[str] | None = None) -> list[dict]:
     """Ćwiczenia pasujące do filtrów. Kolejność: ulubione, potem najczęściej robione, potem alfabetycznie. Wybrane wcześniej
-    (zachowaj) zostaje. dozwolony_sprzet: tylko ćwiczenia ze sprzętem z tego zbioru (profil „Moja siłownia”); None = bez ograniczenia."""
+    (zachowaj) zostaje. dozwolony_sprzet: tylko ćwiczenia ze sprzętem (i maszynami) z tego zbioru (profil „Moja siłownia”, zob.
+    maszyny.dostepne); None = bez ograniczenia."""
+    from maszyny import dostepne
     slowa = [_rdzen(w) for w in _norma(szukaj).split()]
     kategoria = _kat(kategoria)
     wynik = []
@@ -186,7 +196,7 @@ def filtruj(lista: list[dict], szukaj: str = "", partia: str = WSZYSTKIE, sprzet
             continue
         if sprzet != WSZYSTKIE and sprzet != c["sprzet"]:
             continue
-        if dozwolony_sprzet is not None and c["sprzet"] not in dozwolony_sprzet:
+        if not dostepne(c, dozwolony_sprzet):
             continue
         if slowa and not all(s in c["szukaj"] for s in slowa):
             continue
@@ -201,6 +211,7 @@ def podobne(lista: list[dict], nazwa: str, dozwolony_sprzet: set[str] | None = N
     """Ćwiczenia zastępujące dane: ta sama partia główna i ten sam rodzaj (np. siłowe), tylko sprzęt, który masz.
     Wyżej: ten sam typ ruchu (wielostawowe/izolowane), inny sprzęt niż w oryginale (zajęta sztanga → hantle lub maszyna),
     wspólne partie dodatkowe, ulubione i te, które już robiłeś."""
+    from maszyny import dostepne
     obecne = next((c for c in lista if c["nazwa"] == nazwa), None)
     if obecne is None:
         return []
@@ -212,7 +223,7 @@ def podobne(lista: list[dict], nazwa: str, dozwolony_sprzet: set[str] | None = N
             continue
         if obecne["rodzaj"] and c["rodzaj"] and c["rodzaj"] != obecne["rodzaj"]:
             continue
-        if dozwolony_sprzet is not None and c["sprzet"] not in dozwolony_sprzet:
+        if not dostepne(c, dozwolony_sprzet):
             continue
         punkty = 0
         if obecne["typ"] and c["typ"] == obecne["typ"]:

@@ -83,11 +83,11 @@ def pasowanie_presetow(dozwolony: set[str] | None) -> list[dict]:
         if rola is None or rola != "Główne":
             continue
         p["ile"] += 1
-        if dozwolony is None or sprzet in dozwolony:
+        if dozwolony is None or "*" in dozwolony or sprzet in dozwolony:
             p["pasuje"] += 1
     for p in zebrane.values():
         p["ocena"] = p["pasuje"] / p["ile"] if p["ile"] else 0.0
-        if p["kategoria"] == "Cardio" and dozwolony is not None and "Maszyna cardio" not in dozwolony:
+        if p["kategoria"] == "Cardio" and dozwolony is not None and not {"*", "Maszyna cardio"} & dozwolony:
             p["ocena"] = 0.0     # cardio z presetów to rower, wioślarz i schody: bez maszyn cardio ich nie zrobisz
     return list(zebrane.values())
 
@@ -352,7 +352,8 @@ def _krok_cel() -> None:
         dozwolony = profil.dozwolony_sprzet(profil.sprzet_wybrany())
         lista = pasowanie_presetow(dozwolony)
         propozycja = zaproponuj_plan(stan_nowy["cel"], stan_nowy["silowe"], stan_nowy["cardio"], stan_nowy["krotkie"],
-                                     stan_nowy["osobno"], lista, dozwolony is None or "Maszyna cardio" in dozwolony)
+                                     stan_nowy["osobno"], lista,
+                                     dozwolony is None or bool({"*", "Maszyna cardio"} & dozwolony))
         for d in propozycja:
             w[f"ob_plan_{d['Dzien']}"] = d["Typ"] or ODPOCZYNEK
             w[f"ob_notatka_{d['Dzien']}"] = d["Notatka"]

@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 
 import streamlit as st
 
+from maszyny import dostepne
+
 W, I = "Wielostawowe", "Izolowane"        # typ ćwiczenia (jak w bazie ćwiczeń)
 CZASY = (30, 45, 60, 75, 90, 120)         # minuty (cały trening, razem z rozgrzewką i schłodzeniem)
 CZAS_DOMYSLNY = 60
@@ -59,7 +61,7 @@ SLOTY_GRUPY = {
 }
 RDZEN = 3                                 # tyle pierwszych wielostawowych nie wypadnie przy skracaniu do czasu
 
-POPULARNOSC = {"Sztanga": 6, "Hantle": 6, "Maszyna": 5, "Wyciąg": 5, "Suwnica Smitha": 3, "Masa ciała": 3, "Kettlebell": 2,
+POPULARNOSC = {"Talerz": -2, "Sztanga": 6, "Hantle": 6, "Maszyna": 5, "Wyciąg": 5, "Suwnica Smitha": 3, "Masa ciała": 3, "Kettlebell": 2,
                "Sztanga łamana": 3, "Landmine / T-bar": 2, "Inny sprzęt": -5}
 SPRZET_CIEZKI = ("Sztanga", "Suwnica Smitha", "Landmine / T-bar", "Sztanga trap bar")
 SPRZET_IZOLACJE = ("Wyciąg", "Maszyna", "Hantle")
@@ -222,7 +224,7 @@ def _dodaj_rodziny(c: dict, rodziny: dict) -> None:
 def _dozwolone(c: dict, u: Ustawienia) -> bool:
     if c["ukryte"] or c["rodzaj"] in WYKLUCZONE_RODZAJE:
         return False
-    return u.dozwolony is None or c["sprzet"] in u.dozwolony
+    return dostepne(c, u.dozwolony)
 
 
 def _kandydaci(lista: list[dict], poziomy: dict, partie: tuple, slot_typ: str | None, u: Ustawienia, uzyte: set,
@@ -292,7 +294,7 @@ def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: 
 
     # 1) ulubione: najwyżej dwa, z wybranych partii, ze sprzętem, który masz; kolejne warianty biorą inne
     ulub = sorted(n for n in u.ulubione if n in po_nazwie and po_nazwie[n]["partia"] in wszystkie_partie
-                  and not po_nazwie[n]["ukryte"] and (u.dozwolony is None or po_nazwie[n]["sprzet"] in u.dozwolony))
+                  and not po_nazwie[n]["ukryte"] and dostepne(po_nazwie[n], u.dozwolony))
     if ulub:
         start = ((1 if poziom >= 1 and len(ulub) > LIMIT_ULUBIONYCH else 0) + seria) % len(ulub)
         kolejnosc = ulub[start:] + ulub[:start]
