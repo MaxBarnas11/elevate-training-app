@@ -23,6 +23,8 @@ import streamlit as st
 W, I = "Wielostawowe", "Izolowane"        # typ ćwiczenia (jak w bazie ćwiczeń)
 CZASY = (30, 45, 60, 75, 90, 120)         # minuty (cały trening, razem z rozgrzewką i schłodzeniem)
 CZAS_DOMYSLNY = 60
+MAX_CWICZEN = {30: 4, 45: 5, 60: 6, 75: 7, 90: 7, 120: 10}   # twardy limit liczby ćwiczeń dla danego czasu
+LUZ_CZASU = 1.15                          # czas traktujemy luźno: trening może wyjść do 15% dłuższy niż wybrany
 NARZUT_MIN = 15                           # rozgrzewka i schłodzenie, w minutach (nie wpisujemy ich w trening, ale zajmują czas)
 ZAPAS_PRZERW = 1.1                        # dłuższe przerwy niż w tabelce: dolicza ok. 10% do czasu serii
 LIMIT_ULUBIONYCH = 2
@@ -328,6 +330,10 @@ def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: 
         pozycje.append(Pozycja(c["nazwa"], c["partia"], c["typ"] or "", typ, serie, od, do, jedn, s["etykieta"], [s["powod"]],
                                alt, chroniona=(s["etykieta"] == "ulubione"), rdzen=(typ == W and wielo <= RDZEN)))
     _przytnij(pozycje, u, uwagi)
+    # zapas czasu: główne (wielostawowe) ćwiczenia dostają czwartą serię zamiast dokładania kolejnych ćwiczeń
+    for p in pozycje:
+        if p.slot_typ == W and p.jednostka != "min" and p.serie == 3 and szacunek_minut(pozycje, u.cel) + _minuty(p, u.cel) / 3 <= u.czas:
+            p.serie = 4
     return {"nazwa": "Na dziś: " + ", ".join(grupy), "opis": ", ".join(g.lower() for g in grupy), "pozycje": pozycje,
             "minuty": szacunek_minut(pozycje, u.cel), "uwagi": uwagi, "poziom": poziom, "seria": seria}
 
@@ -339,7 +345,12 @@ def _przytnij(pozycje: list[Pozycja], u: Ustawienia, uwagi: list[str]) -> None:
         return max((p for p in pozycje if p.etykieta != "ulubione" and p.serie > minimum and p.jednostka != "min"),
                    key=lambda p: p.serie, default=None)
 
-    while szacunek_minut(pozycje, u.cel) > u.czas:
+    limit = MAX_CWICZEN.get(u.czas, 7)
+
+    def za_duzo() -> bool:
+        return szacunek_minut(pozycje, u.cel) > u.czas * LUZ_CZASU or len(pozycje) > limit
+
+    while za_duzo():
         ofiara = next((p for p in reversed(pozycje) if p.etykieta == "" and not p.rdzen), None)
         if ofiara is not None:
             pozycje.remove(ofiara)
@@ -358,6 +369,8 @@ def _przytnij(pozycje: list[Pozycja], u: Ustawienia, uwagi: list[str]) -> None:
         if len(zwykle) > 1:
             pozycje.remove(zwykle[-1])
             continue
+        if szacunek_minut(pozycje, u.cel) <= u.czas * LUZ_CZASU:
+            return
         uwagi.append(f"Ulubione ćwiczenia nie mieszczą się w {u.czas} min (wychodzi ok. {szacunek_minut(pozycje, u.cel)} min); "
                      "zostawiłem je, bo są ważniejsze niż czas.")
         return
