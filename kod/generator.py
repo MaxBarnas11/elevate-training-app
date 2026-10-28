@@ -714,10 +714,16 @@ def okno_generatora() -> None:
 
 
 def przycisk_generatora() -> None:
-    """Przycisk „Ułóż trening na dziś” (strona Treningi): duży, w kolorach głównego przycisku, żeby było go widać. Otwiera okno w krokach."""
-    st.markdown("<style>.st-key-gen_otworz button{min-height:3.4rem;}.st-key-gen_otworz button p{font-size:1.1rem !important;font-weight:800;"
-                "letter-spacing:.02em;}</style>", unsafe_allow_html=True)
-    if st.button("✦ Ułóż trening na dziś", use_container_width=True, key="gen_otworz", type="primary",
+    """Przycisk „Ułóż trening na dziś” (strona Treningi): szklana pigułka z gradientową ramką i poświatą, kompaktowa. Otwiera okno w krokach."""
+    st.markdown("<style>"
+                ".st-key-gen_otworz button{min-height:2.7rem !important;border:2px solid transparent !important;border-radius:999px !important;"
+                "background:var(--sz-blask) padding-box,var(--sz-mgla) padding-box,linear-gradient(var(--e-kafelek),var(--e-kafelek)) padding-box,"
+                "var(--sz-ramka) border-box !important;box-shadow:var(--sz-krawedz),0 0 18px color-mix(in srgb,var(--e-g2) 45%,transparent) !important;}"
+                ".st-key-gen_otworz button p{font-size:1rem !important;font-weight:800 !important;letter-spacing:.02em;"
+                "background:var(--sz-ramka);-webkit-background-clip:text;background-clip:text;color:transparent !important;}"
+                ".st-key-gen_otworz button:hover,.st-key-gen_otworz button:active{box-shadow:var(--sz-krawedz),0 0 26px color-mix(in srgb,var(--e-g2) 65%,transparent) !important;}"
+                "</style>", unsafe_allow_html=True)
+    if st.button("✦ Ułóż trening na dziś", use_container_width=True, key="gen_otworz",
                  help="Wybierasz partie i czas, a aplikacja proponuje trzy treningi z Twoich ulubionych ćwiczeń, nowych i sprawdzonych."):
         _reset()
         okno_generatora()
