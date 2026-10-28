@@ -1,65 +1,59 @@
-"""Układanie presetów z ulubionych: reguły, bez modelu AI.
+"""Trening na dziś: układanie jednego treningu z ulubionych ćwiczeń, sprzętu z „Mojej siłowni”, partii i czasu. Reguły, bez modelu AI.
 
-Wejście: ulubione ćwiczenia, sprzęt z „Mojej siłowni”, cel treningowy, liczba dni w tygodniu, czas jednego treningu i partie, które
-mają dostać więcej uwagi. Wyjście: zwykłe presety (kategoria „Własne”), które można dalej edytować, z krótkim uzasadnieniem
-każdego wyboru. Kolejność ważności: ulubione, potem cel, na końcu czas (czas tylko przycina to, co nie jest ulubione ani akcentem).
+Użytkownik wybiera partie, które chce dziś zrobić, i czas. Aplikacja proponuje trzy różne treningi:
+- 1–2 ulubione ćwiczenia z wybranych partii (zawsze, jeśli ma takie przy sprzęcie, który ma),
+- 1–2 nowe, czyli takie, których jeszcze nie robił (rozwój, urozmaicenie),
+- reszta to sprawdzone, podstawowe ćwiczenia (wielostawowe na początku).
+Czas jest najmniej ważny: skraca trening, ale nie usuwa ulubionych ani nowych. Gdy w presetach jest już coś pasującego do
+wybranych partii i czasu, najpierw pokazujemy to.
 
-Moduł logiki (`uloz`) nie zależy od Streamlita i nie czyta bazy, więc da się go testować na samej liście ćwiczeń. Widok
-(`sekcja_profilu`) i zapis (`zapisz_presety`) są poniżej.
+Logika (`uloz_dzis`, `trzy_warianty`, `pasujacy_preset`) nie zależy od Streamlita i nie czyta bazy. Okno (`okno_generatora`) jest na końcu.
 """
 from __future__ import annotations
 
-import json
+import html
 import re
 import sqlite3
 import unicodedata
 from contextlib import closing
 from dataclasses import dataclass, field
 
+import streamlit as st
+
 W, I = "Wielostawowe", "Izolowane"        # typ ćwiczenia (jak w bazie ćwiczeń)
-MIN_DNI, MAKS_DNI = 2, 6
-CZASY = (30, 45, 60, 75, 90, 120)         # minuty jednego treningu
-CZAS_DOMYSLNY, DNI_DOMYSLNE = 60, 3
+CZASY = (30, 45, 60, 90)                  # minuty
+CZAS_DOMYSLNY = 60
 NARZUT_MIN = 5                            # rozgrzewka i przygotowanie, w minutach
-MAKS_AKCENTOW = 3
-WYKLUCZONE_RODZAJE = {"Plyometria", "Strongman", "Olimpijskie", "Cardio"}   # nie wchodzą do zwykłych slotów (chyba że ulubione)
+LIMIT_ULUBIONYCH = 2
+WYKLUCZONE_RODZAJE = {"Plyometria", "Strongman", "Olimpijskie", "Cardio"}   # nie wchodzą do zwykłych slotów
 
 CEL_SILA, CEL_MASA, CEL_REDUKCJA, CEL_KONDYCJA = "Siła", "Masa mięśniowa", "Redukcja tkanki tłuszczowej", "Kondycja i zdrowie"
-CELE_Z_CARDIO = (CEL_REDUKCJA, CEL_KONDYCJA)
+CELE_KROTSZE_PRZERWY = (CEL_REDUKCJA, CEL_KONDYCJA)
 
-# Slot: (partie, typ, rola w dniu). Typ None = obojętny (partie, w których i tak robi się głównie izolacje).
-# „rdzeń” = pierwsze slotów wielostawowych, których czas nigdy nie przycina.
-PARTIE_DOLNE = ("Czworogłowe", "Dwugłowe uda", "Pośladki")
-SZABLONY = {
-    "Push": [(("Klatka",), W), (("Barki przód",), W), (("Klatka",), I), (("Barki bok",), I), (("Triceps",), None), (("Triceps",), None)],
-    "Pull": [(("Plecy szerokie",), W), (("Plecy górne",), W), (("Plecy szerokie", "Plecy górne", "Plecy dolne"), I),
-             (("Barki tył",), I), (("Biceps",), None), (("Biceps",), None)],
-    "Nogi": [(("Czworogłowe",), W), (("Dwugłowe uda", "Pośladki"), W), (("Czworogłowe",), I), (("Dwugłowe uda",), I),
-             (("Łydki",), None), (("Brzuch",), None)],
-    "Góra": [(("Klatka",), W), (("Plecy szerokie",), W), (("Barki przód",), W), (("Plecy górne",), W),
-             (("Biceps",), None), (("Triceps",), None), (("Barki bok",), I)],
-    "Całe ciało A": [(("Czworogłowe",), W), (("Klatka",), W), (("Plecy szerokie",), W), (("Dwugłowe uda", "Pośladki"), W),
-                     (("Barki bok",), I), (("Brzuch",), None)],
-    "Całe ciało B": [(("Dwugłowe uda", "Pośladki"), W), (("Barki przód",), W), (("Plecy górne",), W), (("Czworogłowe",), W),
-                     (("Biceps",), None), (("Triceps",), None)],
-    "Całe ciało C": [(("Czworogłowe", "Pośladki"), W), (("Klatka",), W), (("Plecy szerokie", "Plecy górne"), W),
-                     (("Barki przód", "Barki bok"), W), (("Łydki",), None), (("Brzuch",), None)],
+# Grupy partii widoczne dla użytkownika (kolejność = od dużych do małych; w takiej kolejności układa się trening)
+GRUPY = {
+    "Nogi": ("Czworogłowe", "Dwugłowe uda"),
+    "Plecy": ("Plecy szerokie", "Plecy górne", "Plecy dolne"),
+    "Klatka": ("Klatka",),
+    "Barki": ("Barki przód", "Barki bok", "Barki tył"),
+    "Pośladki": ("Pośladki",),
+    "Biceps": ("Biceps",),
+    "Triceps": ("Triceps",),
+    "Brzuch": ("Brzuch",),
+    "Łydki": ("Łydki",),
 }
-OPISY = {
-    "Push": "klatka, barki, triceps", "Pull": "plecy, tył barków, biceps", "Nogi": "nogi, łydki, brzuch",
-    "Góra": "klatka, plecy, barki, ramiona", "Dół": "nogi, łydki, brzuch",
-    "Całe ciało A": "całe ciało", "Całe ciało B": "całe ciało", "Całe ciało C": "całe ciało",
+# Kolejne ćwiczenia w grupie: (partie, typ). Typ: wielostawowe, potem izolacje (None = obojętne, np. małe partie).
+_PL = GRUPY["Plecy"]
+SLOTY_GRUPY = {
+    "Nogi": [(("Czworogłowe",), W), (("Dwugłowe uda",), W), (("Czworogłowe",), I), (("Dwugłowe uda",), I), (GRUPY["Nogi"], I)],
+    "Plecy": [(("Plecy szerokie",), W), (("Plecy górne",), W), (_PL, I), (_PL, W), (_PL, I)],
+    "Klatka": [(("Klatka",), W), (("Klatka",), I), (("Klatka",), W), (("Klatka",), I), (("Klatka",), I)],
+    "Barki": [(("Barki przód",), W), (("Barki bok",), I), (("Barki tył",), I), (("Barki bok",), I)],
+    "Pośladki": [(("Pośladki",), W), (("Pośladki",), I), (("Pośladki",), I), (("Pośladki",), I)],
+    "Biceps": [(("Biceps",), None)] * 4, "Triceps": [(("Triceps",), None)] * 4,
+    "Brzuch": [(("Brzuch",), None)] * 4, "Łydki": [(("Łydki",), None)] * 3,
 }
-# Podział tygodnia wg liczby dni: (nazwa dnia, szablon)
-PODZIAL = {
-    2: [("Całe ciało A", "Całe ciało A"), ("Całe ciało B", "Całe ciało B")],
-    3: [("Całe ciało A", "Całe ciało A"), ("Całe ciało B", "Całe ciało B"), ("Całe ciało C", "Całe ciało C")],
-    4: [("Góra A", "Góra"), ("Dół A", "Nogi"), ("Góra B", "Góra"), ("Dół B", "Nogi")],
-    5: [("Push", "Push"), ("Pull", "Pull"), ("Nogi", "Nogi"), ("Góra", "Góra"), ("Dół", "Nogi")],
-    6: [("Push A", "Push"), ("Pull A", "Pull"), ("Nogi A", "Nogi"), ("Push B", "Push"), ("Pull B", "Pull"), ("Nogi B", "Nogi")],
-}
-# Dni tygodnia (0 = poniedziałek) dla planu tygodnia
-DNI_TYGODNIA = {2: (1, 4), 3: (0, 2, 4), 4: (0, 1, 3, 4), 5: (0, 1, 2, 4, 5), 6: (0, 1, 2, 3, 4, 5)}
+RDZEN = 3                                 # tyle pierwszych wielostawowych nie wypadnie przy skracaniu do czasu
 
 POPULARNOSC = {"Sztanga": 6, "Hantle": 6, "Maszyna": 5, "Wyciąg": 5, "Suwnica Smitha": 3, "Masa ciała": 3, "Kettlebell": 2,
                "Sztanga łamana": 3, "Landmine / T-bar": 2, "Inny sprzęt": -5}
@@ -69,14 +63,10 @@ SPRZET_IZOLACJE = ("Wyciąg", "Maszyna", "Hantle")
 
 @dataclass
 class Ustawienia:
-    dni: int = DNI_DOMYSLNE
-    czas: int = CZAS_DOMYSLNY
     cel: str = ""
-    akcent: tuple = ()
     ulubione: frozenset = frozenset()
-    unikaj: frozenset = frozenset()
-    ulub_sprzet: frozenset = frozenset()
     dozwolony: frozenset | None = None      # None = nie filtruj po sprzęcie
+    czas: int = CZAS_DOMYSLNY
 
 
 @dataclass
@@ -89,11 +79,11 @@ class Pozycja:
     powt_od: int
     powt_do: int
     jednostka: str
+    etykieta: str = ""                       # „ulubione” / „nowe” / „” (sprawdzone)
     powody: list = field(default_factory=list)
     alternatywa: str = ""
-    chroniona: bool = False                  # ulubione albo akcent: czas jej nie przytnie
+    chroniona: bool = False                  # ulubione i nowe: czas ich nie przytnie
     rdzen: bool = False
-    cardio: bool = False
 
 
 def _norma(t: str) -> str:
@@ -107,7 +97,8 @@ RE_IZOL = re.compile(r"(rozpiet|pullover|wznos|uginanie|prostowanie|odwodzenie|p
 RE_WIELO = re.compile(r"^(wyciskanie|przysiad|martwy ciag|wioslowanie|sciaganie|podciaganie|hip thrust|wypychanie|rumunski|zakrok|"
                       r"dipy|pompki|wykrok|wejscia)")
 RE_DZIWNE = re.compile(r"(jednorac|jednonoz|jedna reka|naprzemienn|plie|dookola|gilotyn|szyi|neck|z gumami|izometr|zegarow|rotacj|"
-                       r"podwyzszeni|wzdluz tulowia|bradford|dnem do gory|boczny|na brzuchu|odwrotn|na podlodze|przelozon|zawieszeni|trx|svend|z przejsciem|wycieraczk|kettlebell|ugietych)")
+                       r"podwyzszeni|wzdluz tulowia|bradford|dnem do gory|boczny|na brzuchu|odwrotn|na podlodze|przelozon|zawieszeni|"
+                       r"trx|svend|z przejsciem|wycieraczk|kettlebell|ugietych|anti-gravity)")
 RE_BRZUCH = re.compile(r"(plank|deska|brzuszki|unoszenie (nog|kolan)|spiecie|allah|robak|roller|rowerek|russian)")
 
 
@@ -119,11 +110,6 @@ def rodzaj_ruchu(c: dict) -> str | None:
     if RE_WIELO.search(n):
         return W
     return c["typ"] or None
-
-
-def _klucz_ruchu(nazwa: str) -> str:
-    """Pierwsze dwa słowa nazwy (bez polskich znaków): ogranicza powtarzanie prawie tego samego ruchu w jednym dniu."""
-    return " ".join(_norma(nazwa).split()[:2])
 
 
 def _schemat(cel: str, typ: str | None, numer_wielostawowego: int, partia: str, jednostka_dom: str):
@@ -139,22 +125,22 @@ def _schemat(cel: str, typ: str | None, numer_wielostawowego: int, partia: str, 
         if typ == W:
             return (4, 3, 6, jedn) if numer_wielostawowego < 2 else (3, 6, 8, jedn)
         return 3, 8, 12, jedn
-    if cel in CELE_Z_CARDIO:
+    if cel in CELE_KROTSZE_PRZERWY:
         return (3, 8, 12, jedn) if typ == W else (3, 12, 15, jedn)
-    # masa (i brak celu)
-    if typ == W:
+    if typ == W:                                          # masa i brak celu
         return (4, 6, 10, jedn) if numer_wielostawowego < 2 else (3, 8, 12, jedn)
     return 3, 10, 15, jedn
 
 
 def _minuty(p: Pozycja, cel: str) -> float:
-    if p.cardio or p.jednostka == "min":
+    if p.jednostka == "min":
         return (p.powt_od + p.powt_do) / 2
     ciezko = cel == CEL_SILA
+    krotko = cel in CELE_KROTSZE_PRZERWY
     if p.slot_typ == W or p.typ == W:
-        na_serie = 3.5 if ciezko else 3.0 if cel not in CELE_Z_CARDIO else 2.3
+        na_serie = 3.5 if ciezko else 2.3 if krotko else 3.0
     else:
-        na_serie = 2.5 if ciezko else 2.0 if cel not in CELE_Z_CARDIO else 1.6
+        na_serie = 2.5 if ciezko else 1.6 if krotko else 2.0
     return p.serie * na_serie
 
 
@@ -162,25 +148,16 @@ def szacunek_minut(pozycje: list[Pozycja], cel: str) -> int:
     return round(NARZUT_MIN + sum(_minuty(p, cel) for p in pozycje))
 
 
-def _punkty(c: dict, slot_typ: str | None, u: Ustawienia, poziom: str) -> tuple[float, list[str]]:
-    """Ocena kandydata do slotu i powody, dla których jest wysoko."""
-    pkt, powody = 0.0, []
-    if c["nazwa"] in u.ulubione:
-        pkt += 1000
-        powody.append("ulubione")
-    if c["sprzet"] and c["sprzet"] in u.ulub_sprzet:
-        pkt += 60
-        powody.append(f"ulubiony sprzęt: {c['sprzet']}")
-    cel = u.cel
+def _punkty(c: dict, slot_typ: str | None, cel: str, poziom: str) -> float:
+    """Ocena kandydata do slotu (im wyżej, tym lepiej pasuje do celu i jest typowym ćwiczeniem)."""
+    pkt = 0.0
     if cel == CEL_SILA and slot_typ == W and c["sprzet"] in SPRZET_CIEZKI:
         pkt += 20
-        powody.append("siła: ciężkie podstawowe ćwiczenie")
     elif cel == CEL_MASA and slot_typ != W and c["sprzet"] in SPRZET_IZOLACJE:
         pkt += 15
-        powody.append("masa: izolacja pod pełną kontrolę ruchu")
     elif cel == CEL_MASA and slot_typ == W and c["sprzet"] in ("Sztanga", "Hantle", "Maszyna"):
         pkt += 10
-    elif cel in CELE_Z_CARDIO and c["sprzet"] in ("Hantle", "Kettlebell", "Maszyna", "Masa ciała"):
+    elif cel in CELE_KROTSZE_PRZERWY and c["sprzet"] in ("Hantle", "Kettlebell", "Maszyna", "Masa ciała"):
         pkt += 6
     pkt += POPULARNOSC.get(c["sprzet"], 0)
     n = _norma(c["nazwa"])
@@ -190,214 +167,237 @@ def _punkty(c: dict, slot_typ: str | None, u: Ustawienia, poziom: str) -> tuple[
         pkt += 15
     if c["partia"] == "Brzuch" and RE_BRZUCH.search(n):
         pkt += 20
-    if c["uzycia"] > 0:
-        pkt += min(c["uzycia"], 10)
-        powody.append("już to robiłeś")
     if poziom == "Zaawansowany":
         pkt -= 15
     elif poziom == "Początkujący":
         pkt += 3
-    return pkt, powody
+    return pkt
 
 
-def _kandydaci(lista: list[dict], poziomy: dict, partie: tuple, slot_typ: str | None, u: Ustawienia, uzyte: set, klucze: set):
+def _klucz_ruchu(nazwa: str) -> str:
+    """Pierwsze dwa słowa nazwy (bez polskich znaków): ogranicza powtarzanie prawie tego samego ruchu."""
+    return " ".join(_norma(nazwa).split()[:2])
+
+
+def _dozwolone(c: dict, u: Ustawienia) -> bool:
+    if c["ukryte"] or c["rodzaj"] in WYKLUCZONE_RODZAJE:
+        return False
+    return u.dozwolony is None or c["sprzet"] in u.dozwolony
+
+
+def _kandydaci(lista: list[dict], poziomy: dict, partie: tuple, slot_typ: str | None, u: Ustawienia, uzyte: set, klucze: set) -> list[dict]:
+    """Ćwiczenia pasujące do slotu, od najlepszego. Ulubione są tu pomijane: dobieramy je osobno (limit na trening)."""
     wynik = []
     for c in lista:
-        if c["nazwa"] in uzyte or c["nazwa"] in u.unikaj:
+        if c["nazwa"] in uzyte or c["nazwa"] in u.ulubione or c["partia"] not in partie or not _dozwolone(c, u):
             continue
-        ulub = c["nazwa"] in u.ulubione
-        if c["ukryte"] and not ulub:
+        if slot_typ is not None and rodzaj_ruchu(c) != slot_typ:
             continue
-        if c["partia"] not in partie:
+        if _klucz_ruchu(c["nazwa"]) in klucze:
             continue
-        if c["rodzaj"] in WYKLUCZONE_RODZAJE and not ulub:
-            continue
-        if u.dozwolony is not None and c["sprzet"] not in u.dozwolony and not ulub:
-            continue
-        if slot_typ is not None and rodzaj_ruchu(c) != slot_typ and not ulub:
-            continue
-        if _klucz_ruchu(c["nazwa"]) in klucze and not ulub:
-            continue
-        pkt, powody = _punkty(c, slot_typ, u, poziomy.get(c["nazwa"], ""))
-        wynik.append((pkt, c, powody))
+        wynik.append((_punkty(c, slot_typ, u.cel, poziomy.get(c["nazwa"], "")), c))
     wynik.sort(key=lambda x: (-x[0], x[1]["nazwa"]))
-    return wynik
+    return [c for _, c in wynik]
 
 
-def _cardio(lista: list[dict], u: Ustawienia, uzyte: set):
-    wynik = []
-    for c in lista:
-        if c["nazwa"] in uzyte or c["nazwa"] in u.unikaj or c["ukryte"] and c["nazwa"] not in u.ulubione:
-            continue
-        if c["partia"] != "Cardio" and c["rodzaj"] != "Cardio":
-            continue
-        if u.dozwolony is not None and c["sprzet"] not in u.dozwolony and c["nazwa"] not in u.ulubione:
-            continue
-        pkt = (1000 if c["nazwa"] in u.ulubione else 0) + (50 if c["sprzet"] in u.ulub_sprzet else 0) \
-            + (5 if c["sprzet"] == "Maszyna cardio" else 0) + min(c["uzycia"], 10)
-        wynik.append((pkt, c))
-    wynik.sort(key=lambda x: (-x[0], x[1]["nazwa"]))
-    return wynik
+def _wybierz(kand: list[dict], wariant: int, pierwszy: bool, znane_najpierw: bool = True) -> tuple[dict | None, str]:
+    """Wybiera ćwiczenie z listy kandydatów. Wariant 0 bierze najlepsze, kolejne warianty przesuwają wybór (poza pierwszym
+    ćwiczeniem grupy, żeby podstawa treningu była ta sama). Zwraca (ćwiczenie, powód)."""
+    if not kand:
+        return None, ""
+    znane = [c for c in kand if c["uzycia"] > 0] if znane_najpierw else []
+    pula = znane or kand
+    idx = 0 if pierwszy else wariant % min(3, len(pula))
+    c = pula[idx]
+    return c, ("już to robiłeś" if c["uzycia"] > 0 else "podstawowe ćwiczenie")
 
 
-def _ulozyc_dzien(nazwa_szablonu: str, lista: list[dict], poziomy: dict, u: Ustawienia, uzyte: set) -> tuple[list[Pozycja], list[str]]:
+def uloz_dzis(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: list[str], wariant: int = 0) -> dict:
+    """Układa jeden trening. Zwraca {nazwa, opis, pozycje, minuty, uwagi}. Ten sam wariant daje zawsze ten sam wynik."""
+    grupy = [g for g in GRUPY if g in grupy]                 # kolejność od dużych partii do małych
+    wszystkie_partie = {p for g in grupy for p in GRUPY[g]}
     uwagi: list[str] = []
-    # Akcent: dodatkowe ćwiczenie na wskazaną partię, zaraz po pierwszym slocie z tą partią
-    sloty = []
-    for partie, typ in SZABLONY[nazwa_szablonu]:
-        sloty.append((partie, typ, False))
-        for a in u.akcent:
-            if a in partie and not any(x[2] and a in x[0] for x in sloty):
-                sloty.append(((a,), I if typ_izol(a) else typ, True))
+
+    # sloty: najpierw po jednym na grupę, potem drugie itd.
+    sloty: list[dict] = []
+    for poziom_slotu in range(max((len(SLOTY_GRUPY[g]) for g in grupy), default=0)):
+        for g in grupy:
+            if poziom_slotu < len(SLOTY_GRUPY[g]):
+                partie_slotu, typ_slotu = SLOTY_GRUPY[g][poziom_slotu]
+                sloty.append({"grupa": g, "partie": partie_slotu, "typ": typ_slotu, "c": None, "etykieta": "", "powod": ""})
+
+    po_nazwie = {c["nazwa"]: c for c in lista}
+    uzyte: set[str] = set()
+    klucze: set[str] = set()
+
+    # 1) ulubione: najwyżej dwa, z wybranych partii, ze sprzętem, który masz; kolejne warianty biorą inne
+    ulub = sorted(n for n in u.ulubione if n in po_nazwie and po_nazwie[n]["partia"] in wszystkie_partie
+                  and not po_nazwie[n]["ukryte"] and (u.dozwolony is None or po_nazwie[n]["sprzet"] in u.dozwolony))
+    if ulub:
+        start = wariant % len(ulub)
+        kolejnosc = ulub[start:] + ulub[:start]
+        wybrane, grupy_uzyte = [], set()
+        for n in kolejnosc:                                   # najpierw z różnych grup
+            g = next(g for g in grupy if po_nazwie[n]["partia"] in GRUPY[g])
+            if g not in grupy_uzyte and len(wybrane) < LIMIT_ULUBIONYCH:
+                wybrane.append(n)
+                grupy_uzyte.add(g)
+        for n in kolejnosc:
+            if n not in wybrane and len(wybrane) < LIMIT_ULUBIONYCH:
+                wybrane.append(n)
+        for n in wybrane:
+            c = po_nazwie[n]
+            g = next(g for g in grupy if c["partia"] in GRUPY[g])
+            ruch = rodzaj_ruchu(c)
+            wolne_g = [s for s in sloty if s["grupa"] == g and s["c"] is None]
+            slot = (next((s for s in wolne_g if c["partia"] in s["partie"] and s["typ"] in (None, ruch)), None)
+                    or next((s for s in wolne_g if c["partia"] in s["partie"]), None) or (wolne_g[0] if wolne_g else None))
+            if slot is None:
+                slot = {"grupa": g, "partie": GRUPY[g], "typ": ruch, "c": None, "etykieta": "", "powod": ""}
+                sloty.append(slot)
+            slot.update(c=c, etykieta="ulubione", powod="ulubione", typ=ruch if ruch else slot["typ"])
+            uzyte.add(n)
+            klucze.add(_klucz_ruchu(n))
+
+    # 2) nowe: 1–2 ćwiczenia, których jeszcze nie robiłeś (izolacje i małe partie, nie ciężkie podstawowe)
+    wolne = [s for s in sloty if s["c"] is None]
+    ile_nowych = 1 if len(sloty) <= 4 else 2
+    kolejnosc_nowych = [s for s in reversed(wolne) if s["typ"] != W] + [s for s in reversed(wolne) if s["typ"] == W]
+    for i, s in enumerate(kolejnosc_nowych):
+        if sum(1 for x in sloty if x["etykieta"] == "nowe") >= ile_nowych:
+            break
+        kand = [c for c in _kandydaci(lista, poziomy, s["partie"], s["typ"], u, uzyte, klucze) if c["uzycia"] == 0]
+        if not kand:
+            continue
+        c = kand[(wariant + i) % min(5, len(kand))]
+        s.update(c=c, etykieta="nowe", powod="nowe, jeszcze tego nie robiłeś: na rozwój")
+        uzyte.add(c["nazwa"])
+        klucze.add(_klucz_ruchu(c["nazwa"]))
+
+    # 3) reszta: sprawdzone, podstawowe ćwiczenia (wielostawowe na początek)
+    pierwsze_w_grupie: set[str] = set()
+    for s in sloty:
+        if s["c"] is not None:
+            pierwsze_w_grupie.add(s["grupa"])
+            continue
+        kand = _kandydaci(lista, poziomy, s["partie"], s["typ"], u, uzyte, klucze)
+        if not kand and s["typ"] is not None:     # slot izolacji bez kandydata: spróbuj szerzej w obrębie grupy
+            kand = _kandydaci(lista, poziomy, GRUPY[s["grupa"]], s["typ"], u, uzyte, klucze)
+        if not kand:
+            continue
+        c, powod = _wybierz(kand, wariant, pierwszy=s["grupa"] not in pierwsze_w_grupie)
+        pierwsze_w_grupie.add(s["grupa"])
+        if c is None:
+            continue
+        s.update(c=c, powod=powod if s["typ"] != W else ("wielostawowe, na początek" if c["uzycia"] == 0 else powod))
+        uzyte.add(c["nazwa"])
+        klucze.add(_klucz_ruchu(c["nazwa"]))
+    for g in grupy:
+        if not any(s["c"] is not None and s["grupa"] == g for s in sloty):
+            uwagi.append(f"Brak ćwiczeń na „{g}” przy sprzęcie z Twojej siłowni.")
+
+    # kolejność: wielostawowe najpierw (ulubione zostają na swoich miejscach w obrębie grup)
+    wypelnione = [s for s in sloty if s["c"] is not None]
+    wypelnione.sort(key=lambda s: 0 if (s["typ"] == W or rodzaj_ruchu(s["c"]) == W) else 1)
 
     pozycje: list[Pozycja] = []
-    klucze: set[str] = set()
-    wielostawowe = 0
-    for partie, typ, akcent in sloty:
-        kand = _kandydaci(lista, poziomy, partie, typ, u, uzyte | {p.nazwa for p in pozycje}, klucze)
-        if not kand:
-            uwagi.append(f"Brak ćwiczenia na „{' / '.join(partie)}” przy Twoim sprzęcie.")
-            continue
-        _pkt, c, powody = kand[0]
-        serie, od, do, jedn = _schemat(u.cel, typ, wielostawowe, c["partia"], _jednostka(c))
+    wielo = 0
+    for s in wypelnione:
+        c = s["c"]
+        typ = W if (s["typ"] == W or rodzaj_ruchu(c) == W) else I
+        serie, od, do, jedn = _schemat(u.cel, typ, wielo, c["partia"], c.get("jednostka") or "powt.")
         if typ == W:
-            wielostawowe += 1
-        powody = list(powody)
-        if akcent:
-            powody.append(f"akcent: {c['partia'].lower()}")
-        if not powody:
-            powody.append("wielostawowe, na początek" if typ == W else "uzupełnienie partii")
-        alt = next((x[1]["nazwa"] for x in kand[1:] if x[1]["sprzet"] != c["sprzet"]), "") or (kand[1][1]["nazwa"] if len(kand) > 1 else "")
-        pozycje.append(Pozycja(c["nazwa"], c["partia"], c["typ"] or "", typ, serie, od, do, jedn, powody, alt,
-                               chroniona=(c["nazwa"] in u.ulubione) or akcent, rdzen=(typ == W and wielostawowe <= 3)))
-        klucze.add(_klucz_ruchu(c["nazwa"]))
-    # ćwiczenie na kondycję/redukcję: cardio na końcu (czas może je przyciąć)
-    if u.cel in CELE_Z_CARDIO:
-        kard = _cardio(lista, u, uzyte | {p.nazwa for p in pozycje})
-        if kard:
-            c = kard[0][1]
-            pozycje.append(Pozycja(c["nazwa"], c["partia"], "", None, 1, 10, 15, "min", ["cardio na koniec: " + u.cel.lower()],
-                                   chroniona=c["nazwa"] in u.ulubione, cardio=True))
-    return pozycje, uwagi
-
-
-def typ_izol(partia: str) -> bool:
-    """Partie, w których dodatkowy akcent ma być izolacją (małe partie)."""
-    return partia in ("Biceps", "Triceps", "Barki bok", "Barki tył", "Łydki", "Brzuch", "Przedramiona")
-
-
-def _jednostka(c: dict) -> str:
-    return c.get("jednostka") or "powt."
+            wielo += 1
+        alt_kand = _kandydaci(lista, poziomy, s["partie"], s["typ"], u, uzyte - {c["nazwa"]}, set())
+        alt = next((x["nazwa"] for x in alt_kand if x["sprzet"] != c["sprzet"]), "") or (alt_kand[0]["nazwa"] if alt_kand else "")
+        pozycje.append(Pozycja(c["nazwa"], c["partia"], c["typ"] or "", typ, serie, od, do, jedn, s["etykieta"], [s["powod"]],
+                               alt, chroniona=(s["etykieta"] == "ulubione"), rdzen=(typ == W and wielo <= RDZEN)))
+    _przytnij(pozycje, u, uwagi)
+    return {"nazwa": "Na dziś: " + ", ".join(grupy), "opis": ", ".join(g.lower() for g in grupy), "pozycje": pozycje,
+            "minuty": szacunek_minut(pozycje, u.cel), "uwagi": uwagi, "wariant": wariant}
 
 
 def _przytnij(pozycje: list[Pozycja], u: Ustawienia, uwagi: list[str]) -> None:
-    """Skraca trening do podanego czasu, usuwając od końca to, co nie jest ulubione, akcentem ani rdzeniem."""
+    """Skraca trening do podanego czasu. Kolejność: znikają zwykłe ćwiczenia z końca, potem serie do trzech, potem nowe ćwiczenia,
+    serie do dwóch i dodatkowe ćwiczenia z rdzenia (zostaje co najmniej jedno). Ulubionych czas nigdy nie usuwa."""
+    def dluga(minimum: int):
+        return max((p for p in pozycje if p.etykieta != "ulubione" and p.serie > minimum and p.jednostka != "min"),
+                   key=lambda p: p.serie, default=None)
+
     while szacunek_minut(pozycje, u.cel) > u.czas:
-        ofiara = next((p for p in reversed(pozycje) if not p.chroniona and not p.rdzen), None)
+        ofiara = next((p for p in reversed(pozycje) if p.etykieta == "" and not p.rdzen), None)
         if ofiara is not None:
             pozycje.remove(ofiara)
             continue
-        # zostały tylko ulubione, akcenty i rdzeń: najpierw mniej serii w rdzeniu (do 3), potem rezygnujemy z czasu
-        dluga = max((p for p in pozycje if p.rdzen and not p.chroniona and p.serie > 3), key=lambda p: p.serie, default=None)
-        if dluga is not None:
-            dluga.serie -= 1
+        if (p := dluga(3)) is not None:
+            p.serie -= 1
             continue
-        komunikat = (f"Ulubione i akcenty nie mieszczą się w {u.czas} min (wychodzi ok. {szacunek_minut(pozycje, u.cel)} min); "
+        ofiara = next((p for p in reversed(pozycje) if p.etykieta == "nowe"), None)
+        if ofiara is not None:
+            pozycje.remove(ofiara)
+            continue
+        if (p := dluga(2)) is not None:
+            p.serie -= 1
+            continue
+        zwykle = [p for p in pozycje if p.etykieta == ""]
+        if len(zwykle) > 1:
+            pozycje.remove(zwykle[-1])
+            continue
+        uwagi.append(f"Ulubione ćwiczenia nie mieszczą się w {u.czas} min (wychodzi ok. {szacunek_minut(pozycje, u.cel)} min); "
                      "zostawiłem je, bo są ważniejsze niż czas.")
-        uwagi[:] = [x for x in uwagi if not x.startswith("Ulubione i akcenty nie mieszczą")] + [komunikat]
         return
 
 
-def uloz(lista: list[dict], poziomy: dict[str, str], u: Ustawienia) -> list[dict]:
-    """Układa tydzień treningów. Zwraca listę presetów: {nazwa, opis, pozycje, minuty, uwagi, szablon}."""
-    dni = min(max(int(u.dni), MIN_DNI), MAKS_DNI)
-    uzyte: set[str] = set()
-    dni_wynik = []
-    for nazwa, szablon in PODZIAL[dni]:
-        pozycje, uwagi = _ulozyc_dzien(szablon, lista, poziomy, u, uzyte)
-        _przytnij(pozycje, u, uwagi)
-        uzyte |= {p.nazwa for p in pozycje}
-        dni_wynik.append({"nazwa": nazwa, "opis": OPISY.get(szablon, ""), "szablon": szablon, "pozycje": pozycje,
-                          "uwagi": uwagi})
-    _dolozyc_nieulozone_ulubione(dni_wynik, lista, u, uzyte)
-    for d in dni_wynik:
-        _przytnij(d["pozycje"], u, d["uwagi"])             # po dołożeniu ulubionych czas może znów przekraczać limit
-        d["minuty"] = szacunek_minut(d["pozycje"], u.cel)
-    return dni_wynik
-
-
-def _dolozyc_nieulozone_ulubione(dni_wynik: list[dict], lista: list[dict], u: Ustawienia, uzyte: set) -> None:
-    """Ulubione, które nie trafiły do żadnego slotu (np. trzecia klatka albo przedramiona), dokładamy do dnia z tą partią."""
-    po_nazwie = {c["nazwa"]: c for c in lista}
-    for nazwa in sorted(u.ulubione):
-        c = po_nazwie.get(nazwa)
-        if c is None or nazwa in uzyte or nazwa in u.unikaj:
+def trzy_warianty(lista: list[dict], poziomy: dict[str, str], u: Ustawienia, grupy: list[str], seria: int = 0) -> list[dict]:
+    """Trzy różne treningi. `seria` 0 daje pierwsze trzy, kolejne dają inne (przycisk „Ułóż inne”). Powtórki są pomijane."""
+    wyniki: list[dict] = []
+    widziane: set[frozenset] = set()
+    wariant = seria * 3
+    for _ in range(12):
+        t = uloz_dzis(lista, poziomy, u, grupy, wariant)
+        wariant += 1
+        klucz = frozenset(p.nazwa for p in t["pozycje"])
+        if not t["pozycje"] or klucz in widziane:
             continue
-        if u.dozwolony is not None and c["sprzet"] not in u.dozwolony and c["sprzet"] != "":
-            continue                                    # nie masz tego sprzętu: ulubione zostaje poza planem
-        kandydaci = [d for d in dni_wynik if c["partia"] in SZABLONY_PARTII[d["szablon"]]]
-        cel_dnia = min(kandydaci or dni_wynik, key=lambda d: len(d["pozycje"]))
-        jedn = _jednostka(c)
-        serie, od, do, jedn = _schemat(u.cel, c["typ"] or I, 5, c["partia"], jedn)
-        poz = Pozycja(c["nazwa"], c["partia"], c["typ"] or "", None, serie, od, do, jedn,
-                      ["ulubione (dołożone, bo nie weszło do podstawowego układu)"], chroniona=True)
-        index = max((i for i, p in enumerate(cel_dnia["pozycje"]) if not p.cardio), default=-1) + 1
-        cel_dnia["pozycje"].insert(index, poz)
-        uzyte.add(nazwa)
+        widziane.add(klucz)
+        wyniki.append(t)
+        if len(wyniki) == 3:
+            break
+    return wyniki
 
 
-SZABLONY_PARTII = {nazwa: {p for partie, _ in sloty for p in partie} for nazwa, sloty in SZABLONY.items()}
+def pasujacy_preset(lista: list[dict], presety: list[dict], grupy: list[str], czas: int) -> dict | None:
+    """Preset, który już masz i który pasuje do wybranych partii oraz czasu. `presety`: [{id, nazwa, kategoria, cwiczenia: [{nazwa, serie}]}]."""
+    wybrane = {p for g in grupy if g in GRUPY for p in GRUPY[g]}
+    if not wybrane:
+        return None
+    partia = {c["nazwa"]: c["partia"] for c in lista}
+    najlepszy, wynik = None, 0.0
+    for p in presety:
+        cw = [c for c in p["cwiczenia"] if c["nazwa"]]
+        if len(cw) < 3:
+            continue
+        w_wybranych = [c for c in cw if partia.get(c["nazwa"]) in wybrane]
+        udzial = len(w_wybranych) / len(cw)
+        pokrycie = len({partia[c["nazwa"]] for c in w_wybranych}) / len(wybrane)
+        minuty = NARZUT_MIN + sum((c.get("serie") or 3) * 2.7 for c in cw)
+        if udzial < 0.75 or pokrycie < 0.5 or minuty > czas * 1.25:
+            continue
+        punkty = udzial + pokrycie + (0.05 if p.get("kategoria") == "Własne" else 0)
+        if punkty > wynik:
+            najlepszy, wynik = p, punkty
+    return najlepszy
 
 
-# ---------------------------------------------------------------- ustawienia w bazie i zapis presetów
+def etykieta_partii(grupy: list[str]) -> str:
+    return ", ".join(g for g in GRUPY if g in grupy)
 
-KLUCZE = {"dni": "gen_dni", "czas": "gen_czas", "akcent": "gen_akcent", "unikaj": "gen_unikaj", "ulub_sprzet": "gen_sprzet_ulub"}
 
+# ---------------------------------------------------------------- dane z bazy i zapis
 
-def _polacz():
+def _polacz() -> sqlite3.Connection:
     import baza
-    db = sqlite3.connect(baza.SCIEZKA_BAZY)
-    db.execute("CREATE TABLE IF NOT EXISTS profil (Klucz TEXT PRIMARY KEY, Wartosc TEXT)")
-    return db
-
-
-def wczytaj_ustawienia() -> dict:
-    """Zapisane wybory z Profilu (dni, czas, akcent, nie chcę, ulubiony sprzęt)."""
-    with closing(_polacz()) as db:
-        surowe = dict(db.execute("SELECT Klucz, Wartosc FROM profil WHERE Klucz LIKE 'gen\\_%' ESCAPE '\\'").fetchall())
-
-    def _lista(klucz):
-        try:
-            w = json.loads(surowe.get(klucz) or "[]")
-            return [str(x) for x in w] if isinstance(w, list) else []
-        except ValueError:
-            return []
-
-    def _liczba(klucz, domyslna, dozwolone):
-        try:
-            w = int(surowe.get(klucz) or domyslna)
-        except ValueError:
-            return domyslna
-        return w if w in dozwolone else domyslna
-
-    return {"dni": _liczba("gen_dni", DNI_DOMYSLNE, range(MIN_DNI, MAKS_DNI + 1)),
-            "czas": _liczba("gen_czas", CZAS_DOMYSLNY, CZASY),
-            "akcent": _lista("gen_akcent")[:MAKS_AKCENTOW], "unikaj": _lista("gen_unikaj"), "ulub_sprzet": _lista("gen_sprzet_ulub")}
-
-
-def zapisz_ustawienia(**pola) -> None:
-    with closing(_polacz()) as db:
-        for nazwa, wartosc in pola.items():
-            klucz = KLUCZE.get(nazwa)
-            if klucz is None:
-                continue
-            tekst = json.dumps(list(wartosc), ensure_ascii=False) if isinstance(wartosc, (list, tuple, set)) else str(wartosc)
-            if wartosc in (None, "", [], ()):
-                db.execute("DELETE FROM profil WHERE Klucz = ?", (klucz,))
-            else:
-                db.execute("INSERT INTO profil (Klucz, Wartosc) VALUES (?, ?) ON CONFLICT(Klucz) DO UPDATE SET Wartosc = excluded.Wartosc",
-                           (klucz, tekst))
-        db.commit()
+    return sqlite3.connect(baza.SCIEZKA_BAZY)
 
 
 def poziomy_cwiczen() -> dict[str, str]:
@@ -409,13 +409,30 @@ def poziomy_cwiczen() -> dict[str, str]:
             return {}
 
 
-def ustawienia_z_profilu(cel: str, wybory: dict | None = None) -> Ustawienia:
-    """Składa ustawienia z zapisanych wyborów, ulubionych i sprzętu z Profilu."""
+def _wszystkie_cwiczenia() -> list[dict]:
+    import baza_cwiczen
+    with closing(_polacz()) as db:
+        return baza_cwiczen.wszystkie(db)
+
+
+def ustawienia_z_profilu(czas: int) -> Ustawienia:
+    """Cel, ulubione i sprzęt z Profilu."""
     import profil
-    w = wybory or wczytaj_ustawienia()
-    return Ustawienia(dni=w["dni"], czas=w["czas"], cel=cel or "", akcent=tuple(w["akcent"]),
-                      ulubione=frozenset(profil.ulubione()), unikaj=frozenset(w["unikaj"]), ulub_sprzet=frozenset(w["ulub_sprzet"]),
-                      dozwolony=(frozenset(d) if (d := profil.dozwolony_sprzet()) is not None else None))
+    dozw = profil.dozwolony_sprzet()
+    return Ustawienia(cel=profil.wczytaj()["cel"] or "", ulubione=frozenset(profil.ulubione()),
+                      dozwolony=frozenset(dozw) if dozw is not None else None, czas=czas)
+
+
+def presety_do_dopasowania() -> list[dict]:
+    import presety
+    wynik = []
+    lista = presety.lista_presetow()
+    for _, w in lista.iterrows():
+        cw = presety.wczytaj_cwiczenia_presetu(int(w["id"]))
+        wynik.append({"id": int(w["id"]), "nazwa": str(w["Nazwa"]), "kategoria": str(w["Kategoria"] or ""),
+                      "cwiczenia": [{"nazwa": str(r["Cwiczenie"] or ""), "serie": None if r["Serie"] != r["Serie"] else r["Serie"]}
+                                    for _, r in cw.iterrows()]})
+    return wynik
 
 
 def wolna_nazwa(nazwa: str, istniejace: set[str]) -> str:
@@ -427,158 +444,255 @@ def wolna_nazwa(nazwa: str, istniejace: set[str]) -> str:
     return kandydat
 
 
-def zapisz_presety(wynik: list[dict], ustaw_plan: bool = False, prefiks: str = "Mój plan: ") -> list[str]:
-    """Zapisuje ułożone treningi jako presety (kategoria „Własne”). Zwraca ich nazwy. Z `ustaw_plan` ustawia też plan tygodnia
-    (godziny i notatki dni treningowych zostają, reszta dni dostaje odpoczynek)."""
-    import plan
+def cwiczenia_do_zapisu(trening: dict) -> list[dict]:
+    """Ćwiczenia treningu w formacie presetu / treningu w toku (główne na górze, kolejność w grupach zostaje)."""
+    wynik = []
+    glowne = 0
+    for p in trening["pozycje"]:
+        rola = "Dodatek"
+        if (p.slot_typ == W or p.rdzen) and glowne < 5:
+            rola = "Główne"
+            glowne += 1
+        wynik.append({"nazwa": p.nazwa, "rola": rola, "serie": p.serie, "powt_od": p.powt_od, "powt_do": p.powt_do,
+                      "jednostka": p.jednostka, "alternatywa": p.alternatywa, "wskazowka": ""})
+    wynik.sort(key=lambda c: c["rola"] != "Główne")
+    return wynik
+
+
+def zapisz_jako_preset(trening: dict, nazwa: str) -> str:
+    """Zapisuje trening jako preset (kategoria „Własne”). Zwraca zapisaną nazwę (przy zajętej dopisuje numer)."""
     import presety
     import sesja_treningowa
     with closing(_polacz()) as db:
         presety._utworz_tabele(db)
         istniejace = {w[0] for w in db.execute("SELECT Nazwa FROM presety")}
-    nazwy = []
-    for d in wynik:
-        if not d["pozycje"]:
-            continue
-        nazwa = wolna_nazwa(prefiks + d["nazwa"], istniejace)
-        istniejace.add(nazwa)
-        glowne = 0
-        cw = []
-        for p in d["pozycje"]:
-            rola = "Dodatek"
-            if (p.slot_typ == W or p.rdzen) and glowne < presety.MAKS_GLOWNYCH:
-                rola = "Główne"
-                glowne += 1
-            cw.append({"nazwa": p.nazwa, "rola": rola, "serie": p.serie, "powt_od": p.powt_od, "powt_do": p.powt_do,
-                       "jednostka": p.jednostka, "alternatywa": p.alternatywa, "wskazowka": ""})
-        cw.sort(key=lambda c: c["rola"] != "Główne")          # główne na górę, kolejność w grupach zostaje
-        sesja_treningowa.utworz_preset(nazwa, cw, "Własne")
-        nazwy.append(nazwa)
-    if ustaw_plan and nazwy:
-        obecny = plan.wczytaj_plan().set_index("Dzien")
-        dni_treningowe = DNI_TYGODNIA.get(len(nazwy), tuple(range(len(nazwy))))
-        przypisane = dict(zip(dni_treningowe, nazwy))
-        zmiany = []
-        for dzien in range(7):
-            wiersz = obecny.loc[dzien]
-            zmiany.append({"Dzien": dzien, "Aktywny": dzien in przypisane, "Typ": przypisane.get(dzien, ""),
-                           "Godzina": wiersz["Godzina"], "Notatka": wiersz["Notatka"]})
-        plan.zapisz_plan(zmiany)
-    return nazwy
+    nazwa = wolna_nazwa((nazwa or "").strip() or trening["nazwa"], istniejace)
+    sesja_treningowa.utworz_preset(nazwa, cwiczenia_do_zapisu(trening), "Własne")
+    return nazwa
 
 
-# ---------------------------------------------------------------- widok w Profilu
+# ---------------------------------------------------------------- okno w zakładce Treningi
 
-def _jednostka_opis(p: Pozycja) -> str:
+CSS_OKNO = (
+    "<style>"
+    "[class*='st-key-gen_rzad'] [data-testid='stHorizontalBlock']{flex-wrap:nowrap !important;gap:8px !important;}"
+    "[class*='st-key-gen_rzad'] [data-testid='stColumn'],[class*='st-key-gen_rzad'] [data-testid='column']"
+    "{min-width:0 !important;flex:1 1 0 !important;width:auto !important;}"
+    "[class*='st-key-gen_rzad'] button{min-height:3.1rem;padding:0.3rem 0.35rem !important;}"
+    "[class*='st-key-gen_rzad'] button p{font-size:0.95rem !important;font-weight:700;white-space:nowrap !important;}"
+    ".gen-poz{display:flex;gap:8px;align-items:baseline;margin:3px 0;line-height:1.3;}"
+    ".gen-poz .n{opacity:.55;min-width:1.2em;}"
+    ".gen-poz .d{opacity:.75;white-space:nowrap;margin-left:auto;padding-left:8px;}"
+    ".gen-znacznik{display:inline-block;font-size:.68rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;"
+    "padding:1px 7px;border-radius:99px;margin-left:6px;border:1px solid var(--e-obram2);vertical-align:middle;}"
+    ".gen-znacznik.u{color:var(--e-tytul_glow2);}"
+    ".gen-znacznik.n{color:var(--e-zielony);}"
+    ".gen-powod{display:block;opacity:.6;font-size:.8rem;}"
+    "</style>"
+)
+
+
+def _reset() -> None:
+    s = st.session_state
+    for klucz in [k for k in s if str(k).startswith("gen_") and k != "gen_otworz"]:
+        del s[klucz]
+    s["gen_krok"] = "wybor"
+    s["gen_grupy"] = []
+    s["gen_czas"] = CZAS_DOMYSLNY
+
+
+def _przelacz_grupe(g: str) -> None:
+    s = st.session_state
+    lista = list(s.get("gen_grupy") or [])
+    if g in lista:
+        lista.remove(g)
+    else:
+        lista.append(g)
+    s["gen_grupy"] = lista
+
+
+def _ustaw_czas(m: int) -> None:
+    st.session_state["gen_czas"] = m
+
+
+def _uloz() -> None:
+    s = st.session_state
+    grupy = list(s.get("gen_grupy") or [])
+    if not grupy:
+        s["gen_blad"] = "Wybierz przynajmniej jedną partię."
+        return
+    lista, poziomy = _wszystkie_cwiczenia(), poziomy_cwiczen()
+    u = ustawienia_z_profilu(int(s.get("gen_czas") or CZAS_DOMYSLNY))
+    s["gen_seria"] = 0
+    s["gen_warianty"] = trzy_warianty(lista, poziomy, u, grupy, 0)
+    s["gen_u"] = u
+    s["gen_preset"] = pasujacy_preset(lista, presety_do_dopasowania(), grupy, u.czas)
+    s["gen_idx"] = 0
+    s["gen_krok"] = "wynik"
+
+
+def _ulozyc_inne() -> None:
+    s = st.session_state
+    s["gen_seria"] = int(s.get("gen_seria") or 0) + 1
+    s["gen_warianty"] = trzy_warianty(_wszystkie_cwiczenia(), poziomy_cwiczen(), s["gen_u"], list(s["gen_grupy"]), s["gen_seria"])
+    s["gen_idx"] = 0
+
+
+def _wybierz_wariant(i: int) -> None:
+    st.session_state["gen_idx"] = i
+
+
+def _krok(krok: str) -> None:
+    st.session_state["gen_krok"] = krok
+    st.session_state.pop("gen_blad", None)
+
+
+def _wybrany() -> dict | None:
+    s = st.session_state
+    idx = int(s.get("gen_idx") or 0)
+    if s.get("gen_preset") and idx == 0:
+        return None
+    warianty = s.get("gen_warianty") or []
+    i = idx - (1 if s.get("gen_preset") else 0)
+    return warianty[i] if 0 <= i < len(warianty) else None
+
+
+def _zacznij() -> None:
+    """Start treningu z wybranej propozycji albo z presetu, który już masz. Okno zamknie się przy następnym przebiegu."""
+    import sesja_treningowa as S
+    s = st.session_state
+    trening = _wybrany()
+    if trening is None and s.get("gen_preset"):
+        S.rozpocznij_z_presetu(int(s["gen_preset"]["id"]))
+    elif trening is not None:
+        cw = [S.nowe_cwiczenie(c["nazwa"], c["rola"], c["serie"], c["powt_od"], c["powt_do"], c["jednostka"], "", c["alternatywa"])
+              for c in cwiczenia_do_zapisu(trening)]
+        S._uruchom(S.nowy_stan(trening["nazwa"], "", S._lzejsze_jesli_wybrano(cw)))
+    else:
+        return
+    s["gen_zamknij"] = True
+
+
+def _zapisz() -> None:
+    s = st.session_state
+    trening = _wybrany()
+    if trening is None:
+        return
+    try:
+        s["gen_zapisano"] = zapisz_jako_preset(trening, s.get("gen_nazwa") or trening["nazwa"])
+        s["gen_krok"] = "wynik"
+    except ValueError as e:
+        s["gen_blad"] = str(e)
+
+
+def _wiersz_przyciskow(klucz: str, etykiety: list, zaznaczone, callback, kolumn: int | None = None, ptaszek: bool = True) -> None:
+    """Rząd dużych przycisków szkła; zaznaczone mają wygląd głównego przycisku i ptaszek."""
+    kolumn = kolumn or len(etykiety)
+    for start in range(0, len(etykiety), kolumn):
+        paczka = etykiety[start:start + kolumn]
+        with st.container(key=f"gen_rzad_{klucz}_{start}"):
+            kol = st.columns(kolumn)
+            for j, et in enumerate(paczka):
+                tak = zaznaczone(et)
+                kol[j].button(("✓ " if tak and ptaszek else "") + (f"{et} min" if isinstance(et, int) else str(et)), key=f"gen_{klucz}_{start + j}",
+                              type="primary" if tak else "secondary", use_container_width=True, on_click=callback, args=(et,))
+
+
+def _krok_wybor() -> None:
+    s = st.session_state
+    if "gen_blad" in s:
+        st.error(s.pop("gen_blad"))
+    st.markdown("**Co dziś trenujesz?**")
+    _wiersz_przyciskow("partie", list(GRUPY), lambda g: g in (s.get("gen_grupy") or []), _przelacz_grupe, kolumn=3)
+    st.markdown("**Ile masz czasu?**")
+    _wiersz_przyciskow("czas", list(CZASY), lambda m: m == s.get("gen_czas"), _ustaw_czas, ptaszek=False)
+    st.caption("Użyję Twoich ulubionych ćwiczeń i sprzętu z „Mojej siłowni”, dołożę kilka nowych dla rozwoju.")
+    st.button("Ułóż trening", type="primary", use_container_width=True, on_click=_uloz, key="gen_dalej",
+              disabled=not s.get("gen_grupy"))
+
+
+def _html_pozycji(i: int, p: Pozycja) -> str:
+    znacznik = {"ulubione": "<span class='gen-znacznik u'>ulubione</span>", "nowe": "<span class='gen-znacznik n'>nowe</span>"}.get(p.etykieta, "")
     zakres = f"{p.powt_od}" if p.powt_od == p.powt_do else f"{p.powt_od}–{p.powt_do}"
-    if p.jednostka == "min":
-        return f"{zakres} min"
-    return f"{p.serie} × {zakres}" + ("" if p.jednostka in ("powt.", "") else f" {p.jednostka}")
+    dane = f"{zakres} min" if p.jednostka == "min" else f"{p.serie} × {zakres}" + ("" if p.jednostka in ("powt.", "") else f" {p.jednostka}")
+    return (f"<div class='gen-poz'><span class='n'>{i}.</span><span><b>{html.escape(p.nazwa)}</b>{znacznik}</span>"
+            f"<span class='d'>{html.escape(dane)}</span></div>")
 
 
-def _zmiana_ustawien() -> None:
-    """Zapis wyborów z pól i wyczyszczenie starej propozycji (nie pasuje już do ustawień)."""
-    import streamlit as st
+def _krok_wynik() -> None:
     s = st.session_state
-    zapisz_ustawienia(dni=s.get("gen_dni", DNI_DOMYSLNE), czas=s.get("gen_czas", CZAS_DOMYSLNY),
-                      akcent=list(s.get("gen_akcent") or []), unikaj=list(s.get("gen_unikaj") or []),
-                      ulub_sprzet=list(s.get("gen_sprzet_ulub") or []))
-    s["gen_wynik"] = None
-    s.pop("gen_zapisano", None)
-
-
-def _zmiana_celu() -> None:
-    import streamlit as st
-
-    import profil
-    profil.zapisz(cel=st.session_state.get("gen_cel") or None)
-    st.session_state["gen_wynik"] = None
-    st.session_state.pop("gen_zapisano", None)
-
-
-def sekcja_profilu() -> None:
-    """Sekcja „Układanie treningów” na stronie Profil: ustawienia, podgląd propozycji i zapis jako presety."""
-    import html
-
-    import streamlit as st
-
-    import profil
-    s = st.session_state
-    dane = profil.wczytaj()
-    zapisane = wczytaj_ustawienia()
-    lista = [c for c in profil._wszystkie_cwiczenia() if not c["ukryte"]]
-    nazwy = {c["nazwa"]: c for c in lista}
-    partie = [p for p in ("Klatka", "Plecy szerokie", "Plecy górne", "Plecy dolne", "Barki przód", "Barki bok", "Barki tył", "Biceps",
-                          "Triceps", "Przedramiona", "Czworogłowe", "Dwugłowe uda", "Pośladki", "Łydki", "Brzuch")
-              if any(c["partia"] == p for c in lista)]
-    sprzet_opcje = [x for x in (profil.sprzet_wybrany() or profil.dostepny_sprzet())]
-    cele = [c for c in profil.CELE if not (profil.niepelnoletni(dane) and c == profil.CEL_REDUKCJA)]
-
-    st.markdown("<div class='pr-sekcja'>Układanie treningów</div>", unsafe_allow_html=True)
+    warianty = s.get("gen_warianty") or []
+    preset = s.get("gen_preset")
+    if "gen_blad" in s:
+        st.error(s.pop("gen_blad"))
+    if s.get("gen_zapisano"):
+        st.success(f"Zapisano preset „{s['gen_zapisano']}”. Znajdziesz go w Treningach (Własne).")
+    st.caption(f"{etykieta_partii(list(s.get('gen_grupy') or []))} · {s.get('gen_czas')} min")
+    if not warianty and not preset:
+        st.warning("Nie udało się ułożyć treningu przy Twoim sprzęcie. Zaznacz więcej sprzętu w „Mojej siłowni” albo wybierz inne partie.")
+        st.button("← Zmień wybór", use_container_width=True, on_click=_krok, args=("wybor",), key="gen_wstecz_pusty")
+        return
+    etykiety = (["Mój"] if preset else []) + [str(i + 1) for i in range(len(warianty))]
+    idx = int(s.get("gen_idx") or 0)
+    with st.container(key="gen_rzad_wariant"):
+        kol = st.columns(len(etykiety))
+        for i, et in enumerate(etykiety):
+            kol[i].button(et, key=f"gen_wariant_{i}", type="primary" if i == idx else "secondary", use_container_width=True,
+                          on_click=_wybierz_wariant, args=(i,))
+    trening = _wybrany()
     with st.container(border=True):
-        st.markdown("Aplikacja ułoży tydzień treningów z Twoich ulubionych ćwiczeń, sprzętu z „Mojej siłowni” i celu. "
-                    "Najpierw liczą się ulubione, potem cel, na końcu czas. Wynik to zwykłe presety, które możesz edytować.")
-        ulub = [n for n in profil.ulubione() if n in nazwy]
-        st.caption(f"Ulubione ćwiczenia: {len(ulub)}" + ("" if ulub else ". Dodaj je wyżej w „Mojej siłowni”, wtedy układ będzie z nich zbudowany."))
-        if "gen_cel" not in s:
-            s["gen_cel"] = dane["cel"] if dane["cel"] in cele else None
-        st.selectbox("Cel", cele, key="gen_cel", index=None, placeholder="Wybierz cel...", on_change=_zmiana_celu,
-                     help="Cel decyduje o liczbie serii i powtórzeń oraz o doborze sprzętu (siła: sztanga, masa: izolacje na maszynach i wyciągach, "
-                          "redukcja i kondycja: krótsze przerwy i cardio na końcu).")
-        if "gen_dni" not in s:
-            s["gen_dni"] = zapisane["dni"]
-        st.select_slider("Dni treningowe w tygodniu", options=list(range(MIN_DNI, MAKS_DNI + 1)), key="gen_dni", on_change=_zmiana_ustawien,
-                         help="2–3 dni: całe ciało. 4: góra i dół dwa razy. 5: push, pull, nogi, góra, dół. 6: push, pull, nogi dwa razy.")
-        if "gen_czas" not in s:
-            s["gen_czas"] = zapisane["czas"]
-        st.select_slider("Czas jednego treningu", options=list(CZASY), key="gen_czas", on_change=_zmiana_ustawien,
-                         format_func=lambda m: f"{m} min",
-                         help="Czas jest najmniej ważny: skraca trening, ale nie usuwa ulubionych ćwiczeń ani partii z akcentem.")
-        if "gen_akcent" not in s:
-            s["gen_akcent"] = [a for a in zapisane["akcent"] if a in partie]
-        st.multiselect("Partie z akcentem (do 3)", partie, key="gen_akcent", on_change=_zmiana_ustawien, max_selections=MAKS_AKCENTOW,
-                       placeholder="Wybierz partie...", help="Dla tych partii w każdym dniu, w którym występują, dojdzie jedno ćwiczenie więcej.")
-        if "gen_sprzet_ulub" not in s:
-            s["gen_sprzet_ulub"] = [x for x in zapisane["ulub_sprzet"] if x in sprzet_opcje]
-        st.multiselect("Ulubiony sprzęt", sprzet_opcje, key="gen_sprzet_ulub", on_change=_zmiana_ustawien,
-                       placeholder="Wybierz sprzęt...", help="Przy podobnych ćwiczeniach wygra to na sprzęcie, który lubisz.")
-        if "gen_unikaj" not in s:
-            s["gen_unikaj"] = [n for n in zapisane["unikaj"] if n in nazwy]
-        st.multiselect("Ćwiczenia, których nie chcę", list(nazwy), key="gen_unikaj", on_change=_zmiana_ustawien,
-                       format_func=lambda n: f"{n} · {nazwy[n]['sprzet']}" if nazwy[n]["sprzet"] else n, placeholder="Szukaj po nazwie...")
+        if trening is None and preset:
+            st.markdown(f"**Masz już pasujący preset: {html.escape(preset['nazwa'])}**")
+            for i, c in enumerate(preset["cwiczenia"], start=1):
+                st.markdown(f"<div class='gen-poz'><span class='n'>{i}.</span><span><b>{html.escape(c['nazwa'])}</b></span></div>",
+                            unsafe_allow_html=True)
+        elif trening is not None:
+            st.markdown(f"**Propozycja {idx + 1 - (1 if preset else 0)}** · ok. {trening['minuty']} min")
+            st.markdown("".join(_html_pozycji(i, p) for i, p in enumerate(trening["pozycje"], start=1)), unsafe_allow_html=True)
+            for uw in trening["uwagi"]:
+                st.caption(uw)
+    st.button("Zacznij trening", type="primary", use_container_width=True, on_click=_zacznij, key="gen_zacznij")
+    with st.container(key="gen_rzad_akcje"):
+        k1, k2 = st.columns(2)
+        k1.button("Zapisz jako preset", use_container_width=True, on_click=_krok, args=("nazwa",), key="gen_do_zapisu",
+                  disabled=trening is None)
+        k2.button("Ułóż inne", use_container_width=True, on_click=_ulozyc_inne, key="gen_inne")
+    st.button("← Zmień wybór", use_container_width=True, on_click=_krok, args=("wybor",), key="gen_wstecz")
 
-        if st.button("Ułóż propozycję", use_container_width=True, key="gen_uloz", type="primary"):
-            s.pop("gen_zapisano", None)
-            u = ustawienia_z_profilu(s.get("gen_cel") or "", {"dni": s["gen_dni"], "czas": s["gen_czas"], "akcent": list(s.get("gen_akcent") or []),
-                                                              "unikaj": list(s.get("gen_unikaj") or []), "ulub_sprzet": list(s.get("gen_sprzet_ulub") or [])})
-            with closing(_polacz()) as db:
-                import baza_cwiczen
-                wszystkie = baza_cwiczen.wszystkie(db)
-            s["gen_wynik"] = uloz(wszystkie, poziomy_cwiczen(), u)
-            s["gen_wynik_u"] = u
 
-        wynik = s.get("gen_wynik")
-        if wynik:
-            u = s.get("gen_wynik_u")
-            st.markdown("**Propozycja** (jeszcze niezapisana)")
-            for d in wynik:
-                with st.expander(f"{d['nazwa']} · ok. {d['minuty']} min · {len(d['pozycje'])} ćw."):
-                    st.caption(d["opis"])
-                    for i, p in enumerate(d["pozycje"], start=1):
-                        powod = f" <span style='opacity:.65'>· {html.escape('; '.join(p.powody))}</span>" if p.powody else ""
-                        st.markdown(f"<div style='margin:2px 0'>{i}. <b>{html.escape(p.nazwa)}</b> · {html.escape(_jednostka_opis(p))}{powod}</div>",
-                                    unsafe_allow_html=True)
-                    for uw in d["uwagi"]:
-                        st.warning(uw)
-            if u is not None and not u.ulubione:
-                st.info("Nie masz ulubionych ćwiczeń, więc układ opiera się tylko na celu i sprzęcie.")
-            st.checkbox("Ustaw też plan tygodnia (zastąpi obecny plan; godziny i notatki zostają)", key="gen_plan")
-            if st.button("Zapisz jako presety", use_container_width=True, key="gen_zapisz"):
-                try:
-                    s["gen_zapisano"] = zapisz_presety(wynik, ustaw_plan=bool(s.get("gen_plan")))
-                    s["gen_wynik"] = None
-                    st.rerun()
-                except ValueError as e:
-                    st.error(str(e))
-        if s.get("gen_zapisano"):
-            st.success("Zapisano presety: " + ", ".join(s["gen_zapisano"]) + ". Znajdziesz je w Treningach (kategoria Własne).")
+def _krok_nazwa() -> None:
+    s = st.session_state
+    trening = _wybrany()
+    if "gen_blad" in s:
+        st.error(s.pop("gen_blad"))
+    if trening is None:
+        _krok("wynik")
+        return
+    st.text_input("Nazwa presetu", value=trening["nazwa"], key="gen_nazwa")
+    with st.container(key="gen_rzad_nazwa"):
+        k1, k2 = st.columns(2)
+        k1.button("← Wstecz", use_container_width=True, on_click=_krok, args=("wynik",), key="gen_nazwa_wstecz")
+        k2.button("Zapisz", type="primary", use_container_width=True, on_click=_zapisz, key="gen_nazwa_zapisz")
+
+
+@st.dialog("Trening na dziś")
+def okno_generatora() -> None:
+    s = st.session_state
+    if s.pop("gen_zamknij", False):
+        st.rerun()
+    st.markdown(CSS_OKNO, unsafe_allow_html=True)
+    krok = s.get("gen_krok", "wybor")
+    if krok == "wynik":
+        _krok_wynik()
+    elif krok == "nazwa":
+        _krok_nazwa()
+    else:
+        _krok_wybor()
+
+
+def przycisk_generatora() -> None:
+    """Przycisk „Ułóż trening na dziś” (strona Treningi). Otwiera okno w krokach."""
+    if st.button("Ułóż trening na dziś", use_container_width=True, key="gen_otworz",
+                 help="Wybierasz partie i czas, a aplikacja proponuje trzy treningi z Twoich ulubionych ćwiczeń, nowych i sprawdzonych."):
+        _reset()
+        okno_generatora()

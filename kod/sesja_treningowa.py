@@ -2368,9 +2368,24 @@ def widok_startu(typ_planu: str | None = None) -> None:
     st.subheader("Rozpocznij trening", help="Prowadzimy Cię seria po serii: wpisujesz wynik, odliczamy przerwę, "
                                             "a na końcu wszystko zapisuje się samo.")
 
+    import generator
+    generator.przycisk_generatora()
     wczytaj_presety_startowe()
     lista = lista_presetow()
     wiersz = None
+    if "preset_zalecany" in st.session_state:
+        st.session_state["start_zrodlo"] = None            # preset z „Na dziś” ma być widoczny, więc bez filtra źródła
+    if not lista.empty:
+        rzad_w_jednej_linii("start_zrodlo")
+        zrodlo = st.segmented_control("Presety", ["Gotowe", "Moje"], key="start_zrodlo", on_change=_wyczysc_wybor_presetu,
+                                      help="Gotowe: presety z aplikacji. Moje: te, które zapisałeś po treningach albo ułożyłeś w „Ułóż trening na dziś”. "
+                                           "Kliknij ten sam przycisk jeszcze raz, żeby pokazać wszystkie.")
+        if zrodlo == "Moje":
+            lista = lista[lista["Kategoria"].fillna("") == "Własne"]
+            if lista.empty:
+                st.caption("Nie masz jeszcze własnych presetów. Zapisz trening po zakończeniu albo ułóż go przyciskiem powyżej.")
+        elif zrodlo == "Gotowe":
+            lista = lista[lista["Kategoria"].fillna("") != "Własne"]
     if not lista.empty:
         wszystkie = lista["Nazwa"].tolist()
         zalecany = st.session_state.pop("preset_zalecany", None)   # wybrany z pozycji „Na dziś” w menu
