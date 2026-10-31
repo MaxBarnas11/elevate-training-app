@@ -25,6 +25,7 @@ import streamlit as st
 import baza
 import baza_cwiczen
 import komp_ui
+import opisy_cwiczen
 import powiadomienia
 import profil
 from karty import (
@@ -2197,11 +2198,22 @@ def _widok_cwiczenia(stan: dict) -> None:
     if st.button("Zamień to ćwiczenie na inne", use_container_width=True, key="sesja_zam_otworz"):
         _zam_reset()
         _okno_zamiany()
+    _jak_wykonac(c["nazwa"])
     with st.expander("Notatka do ćwiczenia" + (" (jest)" if wczytaj_notatke(c["nazwa"]) else "")):
         st.text_area("Notatka do ćwiczenia", key=f"sesja_nota_{nr}", height=80, label_visibility="collapsed",
                      placeholder="np. siedzisko 4, uchwyt wąski, hantle z lewej strony")
         st.button("Zapisz notatkę", use_container_width=True, key=f"sesja_nota_zapisz_{nr}", on_click=_zapisz_notatke, args=(nr,),
                   help="Notatka jest przypięta do ćwiczenia i pokaże się przy nim w każdym kolejnym treningu.")
+
+
+def _jak_wykonac(nazwa: str) -> None:
+    """Rozwijany panel z krótkim opisem wykonania, gdy mamy go dla tego ćwiczenia."""
+    d = opisy_cwiczen.opis(nazwa)
+    if not d:
+        return
+    with st.expander("Jak wykonać"):
+        st.markdown(f"**Ustawienie.** {d['ustawienie']}\n\n**Ruch.** {d['ruch']}\n\n**Uwaga.** {d['uwaga']}")
+        st.caption("Ogólna podpowiedź techniczna. Dostosuj do swojego ciała, a przy bólu przerwij ćwiczenie.")
 
 
 def _panel_dodawania(stan: dict) -> None:

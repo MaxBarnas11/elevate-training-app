@@ -140,9 +140,12 @@ def css_zmiennych() -> str:
     )
 
 
-# Czcionka nagłówków: szeroka grotesk przemysłowa (Archivo, szerokość 125). Ładowana z Google Fonts; gdy sieci brak, działa czcionka zapasowa.
+# Czcionka nagłówków: szeroka grotesk przemysłowa (Archivo, szerokość 125), samodzielnie hostowana (licencja OFL).
+# Plik czcionki (zmienna, osie wdth i wght) kładziemy w static/archivo-wdth-wght.woff2. Nic nie jest ładowane z zewnętrznych serwerów
+# (adres IP użytkownika nie trafia do Google). Gdy pliku brak, przeglądarka używa czcionek zapasowych z listy.
 CZCIONKA_TYTULOW = "'Archivo', 'Helvetica Neue', Arial, sans-serif"
-CSS_CZCIONKI = ("<style>@import url('https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,800&display=swap');</style>")
+CSS_CZCIONKI = ("<style>@font-face{font-family:'Archivo';font-style:normal;font-weight:100 900;font-stretch:62% 125%;font-display:swap;"
+                "src:url('/app/static/archivo-wdth-wght.woff2') format('woff2');}</style>")
 
 
 def zastosuj_motyw() -> None:
