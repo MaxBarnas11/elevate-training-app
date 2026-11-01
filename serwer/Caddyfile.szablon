@@ -1,0 +1,21 @@
+# Caddy: daje HTTPS (certyfikat sam sie zalatwia i odnawia) i przekazuje ruch do Struo.
+# Skopiuj na serwerze jako /etc/caddy/Caddyfile i zamien struo.TWOJA-DOMENA.pl na prawdziwy adres.
+struo.TWOJA-DOMENA.pl {
+	encode gzip
+
+	# ETAP 1 (przed kontami / testy): dodatkowa kłódka haslem. Hash wygenerujesz poleceniem: caddy hash-password
+	# Gdy logowanie Google dziala na serwerze, usun caly blok basic_auth.
+	basic_auth {
+		struo WKLEJ_TU_HASH_Z_CADDY_HASH_PASSWORD
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Streamlit dziala tylko na 127.0.0.1, z internetu widac wylacznie Caddy
+	reverse_proxy 127.0.0.1:8501
+}

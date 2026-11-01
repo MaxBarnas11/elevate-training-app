@@ -1,4 +1,4 @@
-"""Interfejs aplikacji Training Buddy (zakładki, formularz)."""
+"""Struo: plik startowy aplikacji (menu, strony, motywy, formularz dzienny)."""
 from __future__ import annotations
 
 from datetime import date, timedelta

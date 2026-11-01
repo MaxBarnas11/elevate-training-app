@@ -1,0 +1,26 @@
+# Usluga systemd: Struo startuje sama po restarcie serwera i wstaje po awarii.
+# Skopiuj jako /etc/systemd/system/struo.service
+[Unit]
+Description=Struo (aplikacja treningowa)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=struo
+WorkingDirectory=/home/struo/app
+EnvironmentFile=/etc/struo.env
+ExecStart=/home/struo/app/.venv/bin/python -m streamlit run app.py \
+  --server.address 127.0.0.1 --server.port 8501 --server.headless true \
+  --server.enableXsrfProtection true --browser.gatherUsageStats false
+Restart=on-failure
+RestartSec=5
+
+# Ograniczenia: aplikacja nie zobaczy reszty systemu
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/struo/app
+
+[Install]
+WantedBy=multi-user.target
