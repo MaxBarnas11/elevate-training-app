@@ -51,3 +51,6 @@ narzedzia/wynik_*.txt
 # Obowiązujące wersje są w requirements.txt.
 requirements-przypiete*.txt
 requirements-przed-streamlit.txt
+
+# Przykładowe dane trybu demo (tworzy je narzedzia\demo.py)
+demo/

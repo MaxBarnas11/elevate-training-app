@@ -105,6 +105,16 @@ Logowanie Google jest opcjonalne i włącza się plikiem `.streamlit/secrets.tom
 
 Opcjonalne zmienne środowiskowe: `STRUO_LOGOWANIE` (`1` wymusza logowanie, `0` je wyłącza), `STRUO_WLASCICIEL` i `STRUO_DOZWOLONE` (adresy e-mail rozdzielone przecinkami), `STRUO_BAZA` (ścieżka do osobnego pliku bazy, np. dla konta gościa).
 
+## Tryb demo
+
+Żeby obejrzeć aplikację bez własnych danych i bez kont, uruchom ją z przykładowymi danymi (8 tygodni treningów, plan tygodnia, dziennik snu i wagi; wszystkie liczby są wymyślone):
+
+```bash
+python narzedzia/demo.py
+```
+
+Aplikacja otworzy się pod adresem `http://localhost:8503`. Dane demo leżą tylko w folderze `demo/` (poza repozytorium); `--od-nowa` tworzy je jeszcze raz. W trybie demo nie ma logowania, Garmina ani powiadomień. Na Windowsie to samo robi `narzedzia\DEMO.bat`.
+
 ## Testy
 
 Logika aplikacji (generator, filtr sprzętu, opisy ćwiczeń, szacowanie 1RM, przygotowanie bazy, ustawienia logowania) ma testy w folderze `testy/`. Pracują na tymczasowej bazie, więc nie dotykają prawdziwych danych.

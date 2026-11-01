@@ -1214,6 +1214,8 @@ st.session_state["strona_tytul"] = wybrana.title
 
 # Dół menu: połączenie z Garminem i ustawienia (pojawia się pod listą stron)
 with st.sidebar:
+    if uzytkownik.env("DEMO"):      # narzedzia/demo.py: przykładowe dane w folderze demo/
+        st.markdown('<div style="padding-bottom:12px;"><div style="padding:10px 14px;border:2px solid var(--e-akcent);border-radius:12px;background:var(--e-karta);font-weight:700;color:var(--e-tekst);">Tryb demo<div style="font-weight:400;font-size:0.8rem;color:var(--e-przyg);">przykładowe dane, nic tu nie jest prawdziwe</div></div></div>', unsafe_allow_html=True)
     try:
         with st.container(key="profil_kafelek"):     # avatar i imię; dotknięcie otwiera Profil (CSS w profil.py)
             st.markdown(profil.kafelek_boczny_html(), unsafe_allow_html=True)
