@@ -153,6 +153,10 @@ Wszystko jest zapisywane lokalnie w `treningi.db` (dla zaproszonych osób w osob
 
 Podstawą listy ćwiczeń jest [free-exercise-db](https://github.com/yuhonas/free-exercise-db) (licencja Unlicense, domena publiczna), przetłumaczona na polski i rozszerzona o własne ćwiczenia. Szczegóły w pliku `NOTICE.md`.
 
+## Licencja
+
+Kod jest udostępniony do wglądu, wszelkie prawa zastrzeżone (szczegóły w pliku `LICENSE`). Możesz go przeglądać i uruchomić tryb demo, żeby ocenić projekt; na inne użycie potrzebna jest zgoda autora (struo.kontakt@gmail.com).
+
 ## Plany
 
 - Wdrożenie na własny serwer (VPS, domena, https), żeby logowanie Google działało także z telefonu, oraz zaproszenie kilku znajomych.
