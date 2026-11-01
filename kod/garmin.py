@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import time
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
 import streamlit as st
 from garminconnect import Garmin
@@ -162,7 +161,7 @@ def _synchronizuj_garmin_cache(dzisiaj: str) -> dict:
 
     # Brakujące dni z ostatnich LICZBA_DNI_WSTECZ dni (tylko te, których nie ma w bazie)
     dzis = date.fromisoformat(dzisiaj)
-        
+
     mamy = zapisane_dni_garmin()
     dociagniete = 0
     for i in range(1, LICZBA_DNI_WSTECZ):

@@ -1,0 +1,17 @@
+# Ustawienia narzędzi deweloperskich (aplikacja ich nie potrzebuje do działania).
+
+[tool.ruff]
+line-length = 140
+target-version = "py314"
+extend-exclude = ["venv", "kopie", "dane", "goscie"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+# E501: długie linie zostają (czytelne tabele i teksty interfejsu),
+# E402: app.py dopisuje folder kod/ do ścieżki przed importami,
+# E741, E731: krótkie nazwy i lambdy w kilku miejscach, świadomie.
+ignore = ["E501", "E402", "E741", "E731"]
+
+[tool.pytest.ini_options]
+testpaths = ["testy"]
+addopts = "-q"

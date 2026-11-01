@@ -105,6 +105,18 @@ Logowanie Google jest opcjonalne i włącza się plikiem `.streamlit/secrets.tom
 
 Opcjonalne zmienne środowiskowe: `STRUO_LOGOWANIE` (`1` wymusza logowanie, `0` je wyłącza), `STRUO_WLASCICIEL` i `STRUO_DOZWOLONE` (adresy e-mail rozdzielone przecinkami), `STRUO_BAZA` (ścieżka do osobnego pliku bazy, np. dla konta gościa).
 
+## Testy
+
+Logika aplikacji (generator, filtr sprzętu, opisy ćwiczeń, szacowanie 1RM, przygotowanie bazy, ustawienia logowania) ma testy w folderze `testy/`. Pracują na tymczasowej bazie, więc nie dotykają prawdziwych danych.
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .
+pytest
+```
+
+Na Windowsie to samo robi `narzedzia\TESTY.bat`. Na GitHubie te same kroki uruchamiają się automatycznie przy każdym wysłaniu kodu (`.github/workflows/testy.yml`).
+
 ## Dane i prywatność
 
 Wszystko jest zapisywane lokalnie w `treningi.db` (dla zaproszonych osób w osobnych folderach), a kopie w folderze `kopie/`. Baza, plik `.env` z hasłem, klucze logowania, tokeny Garmina i dane użytkowników są w `.gitignore`, więc nigdy nie trafiają do repozytorium. Każdy użytkownik może wyeksportować swoje dane i usunąć je z aplikacji.

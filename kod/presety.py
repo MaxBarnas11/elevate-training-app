@@ -248,4 +248,3 @@ def zapisz_cwiczenia_presetu(preset_id: int, dane: pd.DataFrame) -> None:
             )
             _dodaj_cwiczenie_jesli_brak(db, nazwa, "Inne")
         db.commit()
-        

@@ -24,15 +24,15 @@ import baza
 import logowanie
 import onboarding
 import uzytkownik
-from garmin import formatuj_czas, ostatnie_zapisane_dane, synchronizuj_garmin
+from garmin import ostatnie_zapisane_dane, synchronizuj_garmin
 from rekomendacje import rekomendacje_na_dzis, trening_dzis_zapisany
 from motywy import PALETA, kolor_typu
 from szklo import css_szklo
-from styl import naglowek, zastosuj_styl
-from wykresy import MIN_DNI_DLA_PASMA, SEN_PASMO, pasmo_osobiste, rysuj_wykres
+from styl import zastosuj_styl
+from wykresy import pasmo_osobiste
 from karty import (
     karta_pierscien, karta_wartosc, kolor_snu, status_snu,
-    kolor_czasu_snu, status_czasu_snu, naglowek_strony, format_czasu, ocena_wzgledem_pasma, oblicz_gotowosc, karta_tekst, siatka_kart,
+    kolor_czasu_snu, status_czasu_snu, naglowek_strony, format_czasu, ocena_wzgledem_pasma, oblicz_gotowosc, siatka_kart,
     ZIELONY, ZOLTY, POMARANCZOWY, NIEBIESKI, KOLOR_PRZYGASZONY,
 )
 from karty_start import karta_kroki, karta_kalorie, karta_stres, karta_sen_fazy, karta_tydzien

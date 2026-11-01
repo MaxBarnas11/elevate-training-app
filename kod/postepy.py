@@ -17,12 +17,12 @@ import streamlit as st
 
 import baza
 from karty import (
-    KOLOR_KARTY, KOLOR_OBRAMOWANIA, KOLOR_PRZYGASZONY, KOLOR_TEKSTU, KOLOR_TLA_PIERSCIENIA,
+    KOLOR_OBRAMOWANIA, KOLOR_PRZYGASZONY, KOLOR_TEKSTU, KOLOR_TLA_PIERSCIENIA,
     NIEBIESKI, POMARANCZOWY, ZIELONY, _naglowek_karty, _tlo_karty, siatka_kart,
 )
 from mapa_ciala import mapa_ciala_html
 from motywy import v as _kolor_motywu
-from regeneracja import karta_wykresu, siatka_wykresow, wykres_liniowy_svg
+from regeneracja import karta_wykresu, wykres_liniowy_svg
 from sesja_treningowa import JEDNOSTKI_POWTORZEN, format_kg, jednostka_powtorzen, lista_partii, opis_serii, pytajnik
 
 ZAKRESY = {"30 dni": 30, "90 dni": 90, "Rok": 365, "Wszystko": None}
@@ -498,7 +498,6 @@ def widok_postepow() -> None:
 
     najlepszy = dzienne[kol].max()
     dzien_najlepszego = dzienne[kol].idxmax() if pd.notna(najlepszy) else None
-    ostatni_wpis = dzienne.iloc[-1]
     if len(seria) >= 2:
         zmiana = seria.iloc[-1] - seria.iloc[0]
         opis_zmiany = f"{'▲' if zmiana > 0 else '▼' if zmiana < 0 else '='} {abs(zmiana):.{miejsca}f} {jedn}".replace(".", ",").strip()

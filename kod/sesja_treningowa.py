@@ -29,8 +29,8 @@ import opisy_cwiczen
 import powiadomienia
 import profil
 from karty import (
-    KOLOR_KARTY, KOLOR_OBRAMOWANIA, KOLOR_PRZYGASZONY, KOLOR_TEKSTU, KOLOR_TLA_PIERSCIENIA,
-    CZERWONY, NIEBIESKI, POMARANCZOWY, ZIELONY,
+    KOLOR_OBRAMOWANIA, KOLOR_PRZYGASZONY, KOLOR_TEKSTU, KOLOR_TLA_PIERSCIENIA,
+    CZERWONY, NIEBIESKI, ZIELONY,
     _naglowek_karty, _tlo_karty,
 )
 from motywy import v as _kolor_motywu

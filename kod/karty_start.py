@@ -5,9 +5,8 @@ import html
 
 from motywy import kolor_typu
 from karty import (
-    KOLOR_OBRAMOWANIA, KOLOR_TLA_PIERSCIENIA, KOLOR_TEKSTU, KOLOR_PRZYGASZONY, KOLOR_KARTY,
-    ZIELONY, ZOLTY, POMARANCZOWY, CZERWONY, NIEBIESKI,
-    karta_pierscien, karta_wartosc, format_czasu, _tlo_karty, _naglowek_karty,
+    KOLOR_OBRAMOWANIA, KOLOR_TLA_PIERSCIENIA, KOLOR_TEKSTU, KOLOR_PRZYGASZONY, ZIELONY, ZOLTY, POMARANCZOWY, CZERWONY, NIEBIESKI,
+    karta_pierscien, format_czasu, _tlo_karty, _naglowek_karty,
 )
 
 # ---------------------------------------------------------------

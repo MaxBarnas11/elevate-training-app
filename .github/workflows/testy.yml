@@ -1,0 +1,29 @@
+# Automatyczne sprawdzenie przy każdym wysłaniu kodu na GitHub (push) i przy pull requestach:
+# 1) ruff sprawdza styl i typowe błędy, 2) pytest uruchamia testy z folderu testy/.
+# Testy pracują na tymczasowej bazie i nie potrzebują żadnych sekretów.
+name: Testy
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  testy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Instalacja bibliotek
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Ruff (styl i typowe błędy)
+        run: ruff check .
+      - name: Testy
+        run: pytest
