@@ -18,8 +18,9 @@ def lista(surowe) -> list[str]:
 
 
 print("=== DIAGNOZA LOGOWANIA (bez wartosci tajnych) ===")
-for nazwa in ("OVRLD_LOGOWANIE", "OVRLD_WLASCICIEL", "OVRLD_DOZWOLONE", "OVRLD_BAZA"):
-    print(f"zmienna srodowiskowa {nazwa}: {'USTAWIONA' if os.environ.get(nazwa) else 'nieustawiona'}")
+for nazwa in ("LOGOWANIE", "WLASCICIEL", "DOZWOLONE", "BAZA"):
+    for pelna in (f"STRUO_{nazwa}", f"OVRLD_{nazwa}"):   # OVRLD_ = dawna nazwa, dziala jako zapas
+        print(f"zmienna srodowiskowa {pelna}: {'USTAWIONA' if os.environ.get(pelna) else 'nieustawiona'}")
 if not PLIK.is_file():
     print("Brak pliku .streamlit\\secrets.toml (tryb telefonu albo plik ma inna nazwe).")
     sys.exit(0)
@@ -30,18 +31,19 @@ except Exception as e:   # noqa: BLE001
     sys.exit(0)
 print("Sekcje w pliku:", ", ".join(f"[{k}]" for k, v in dane.items() if isinstance(v, dict)) or "brak")
 print("Klucze luzem (poza sekcjami):", ", ".join(k for k, v in dane.items() if not isinstance(v, dict)) or "brak")
-ov = dane.get("ovrld")
+sekcja = "struo" if isinstance(dane.get("struo"), dict) else "ovrld"   # [ovrld] = dawna nazwa sekcji, dziala jako zapas
+ov = dane.get(sekcja)
 if not isinstance(ov, dict):
-    print("UWAGA: nie ma sekcji [ovrld]. Klucze wlasciciel i dozwolone musza stac pod nagloweniem [ovrld].")
+    print("UWAGA: nie ma sekcji [struo]. Klucze wlasciciel i dozwolone musza stac pod naglowkiem [struo] (albo dawnym [ovrld]).")
 else:
-    print("Klucze w [ovrld]:", ", ".join(ov) or "brak")
+    print(f"Klucze w [{sekcja}]:", ", ".join(ov) or "brak")
     for k in ("wlasciciel", "dozwolone"):
         print(f"  {k}:", [maska(a) for a in lista(ov.get(k))] or "PUSTE albo brak")
 auth = dane.get("auth")
 if isinstance(auth, dict):
     print("Klucze w [auth]:", ", ".join(auth))
     if "dozwolone" in auth or "wlasciciel" in auth:
-        print("UWAGA: wlasciciel/dozwolone stoja w [auth], a maja byc w [ovrld].")
+        print("UWAGA: wlasciciel/dozwolone stoja w [auth], a maja byc w [struo].")
 wpisany = input("\nWpisz adres drugiego konta (zostaje tylko na tym komputerze): ").strip().lower()
 tak = isinstance(ov, dict) and wpisany in set(lista(ov.get("dozwolone"))) | set(lista(ov.get("wlasciciel")))
 print("Ten adres jest na liscie:", "TAK" if tak else "NIE")

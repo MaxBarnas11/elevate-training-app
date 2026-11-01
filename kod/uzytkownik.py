@@ -2,8 +2,11 @@
 
 Bez logowania (praca lokalna, jak dotąd) dane leżą w treningi.db obok aplikacji. Po zalogowaniu każda osoba ma własny folder
 dane/<id>/ z własną bazą, a konto właściciela (adres z ustawień) używa dotychczasowego treningi.db, więc jego dane nie wymagają
-żadnych przenosin. Gdy logowanie jest wymagane (OVRLD_LOGOWANIE=1 albo sekcja [auth] w secrets.toml), a nikt nie jest
+żadnych przenosin. Gdy logowanie jest wymagane (STRUO_LOGOWANIE=1 albo sekcja [auth] w secrets.toml), a nikt nie jest
 zalogowany, dane nie są nigdy zwracane: zamiast ścieżki leci wyjątek BrakUzytkownika.
+
+Ustawienia: zmienne środowiskowe STRUO_* i sekcja [struo] w secrets.toml. Dawne nazwy (OVRLD_* i [ovrld]) działają dalej
+jako zapas, więc stara konfiguracja nie przestaje działać po zmianie nazwy projektu.
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ import streamlit as st
 
 # Główny folder aplikacji (tam leżą treningi.db, dane/, kopie/, .env, ntfy_temat.txt); ten plik leży w kod/, więc o jeden poziom wyżej.
 FOLDER_APLIKACJI = Path(__file__).resolve().parent.parent
-KLUCZ_SESJI = "ovrld_uzytkownik"
+KLUCZ_SESJI = "struo_uzytkownik"
 
 
 class BrakUzytkownika(RuntimeError):
@@ -37,20 +40,30 @@ def _sekret(sekcja: str, klucz: str) -> str:
         return ""
 
 
+def env(nazwa: str) -> str | None:
+    """Zmienna środowiskowa STRUO_<nazwa>; gdy jej nie ma, dawna OVRLD_<nazwa> (zgodność ze starą konfiguracją)."""
+    return os.environ.get(f"STRUO_{nazwa}") or os.environ.get(f"OVRLD_{nazwa}")
+
+
+def sekret_aplikacji(klucz: str) -> str:
+    """Klucz z sekcji [struo] w secrets.toml; gdy go nie ma, z dawnej sekcji [ovrld]."""
+    return _sekret("struo", klucz) or _sekret("ovrld", klucz)
+
+
 def normalizuj_adres(email: str | None) -> str:
     return (email or "").strip().lower()
 
 
-def adresy(env: str, klucz_sekretu: str) -> set[str]:
-    """Lista adresów e-mail z zmiennej środowiskowej albo z secrets.toml (rozdzielone przecinkami lub średnikami)."""
-    surowe = os.environ.get(env) or _sekret("ovrld", klucz_sekretu)
+def adresy(nazwa_env: str, klucz_sekretu: str) -> set[str]:
+    """Lista adresów e-mail ze zmiennej STRUO_<nazwa_env> albo z secrets.toml (rozdzielone przecinkami lub średnikami)."""
+    surowe = env(nazwa_env) or sekret_aplikacji(klucz_sekretu)
     return {a for a in (normalizuj_adres(x) for x in surowe.replace(";", ",").split(",")) if a}
 
 
 def logowanie_wymagane() -> bool:
-    """Czy dostęp wymaga zalogowania. OVRLD_LOGOWANIE=1 wymusza (tak ustawiamy serwer), =0 wyłącza (praca lokalna),
+    """Czy dostęp wymaga zalogowania. STRUO_LOGOWANIE=1 wymusza (tak ustawiamy serwer), =0 wyłącza (praca lokalna),
     a bez zmiennej logowanie jest wymagane, gdy w secrets.toml jest sekcja [auth] albo gdy ten plik jest uszkodzony."""
-    tryb = os.environ.get("OVRLD_LOGOWANIE")
+    tryb = env("LOGOWANIE")
     if tryb == "1":
         return True
     if tryb == "0":
@@ -79,8 +92,8 @@ def secrets_uszkodzone() -> bool:
 
 
 def dozwolone() -> set[str]:
-    """Adresy, które mogą się zalogować: właściciel oraz zaproszeni (OVRLD_DOZWOLONE albo [ovrld] dozwolone w secrets.toml)."""
-    return adresy("OVRLD_WLASCICIEL", "wlasciciel") | adresy("OVRLD_DOZWOLONE", "dozwolone")
+    """Adresy, które mogą się zalogować: właściciel oraz zaproszeni (STRUO_DOZWOLONE albo [struo] dozwolone w secrets.toml)."""
+    return adresy("WLASCICIEL", "wlasciciel") | adresy("DOZWOLONE", "dozwolone")
 
 
 def id_z_adresu(email: str) -> str:
@@ -91,7 +104,7 @@ def id_z_adresu(email: str) -> str:
 def zaloguj(email: str) -> dict:
     """Zapamiętuje w sesji, kto jest zalogowany (wywołuje się po udanym logowaniu przez dostawcę)."""
     adres = normalizuj_adres(email)
-    stan = {"email": adres, "id": id_z_adresu(adres), "wlasciciel": adres in adresy("OVRLD_WLASCICIEL", "wlasciciel")}
+    stan = {"email": adres, "id": id_z_adresu(adres), "wlasciciel": adres in adresy("WLASCICIEL", "wlasciciel")}
     st.session_state[KLUCZ_SESJI] = stan
     return stan
 
@@ -123,8 +136,8 @@ def email() -> str:
 
 def czy_wlasciciel() -> bool:
     """Czy bieżący użytkownik ma dostęp do rzeczy właściciela (Garmin, powiadomienia na jego telefon).
-    Bez logowania (praca lokalna) tak; konto gościa z osobną instancją (OVRLD_BAZA) nie."""
-    if os.environ.get("OVRLD_BAZA"):
+    Bez logowania (praca lokalna) tak; konto gościa z osobną instancją (STRUO_BAZA) nie."""
+    if env("BAZA"):
         return False
     stan = _stan()
     if stan is not None:

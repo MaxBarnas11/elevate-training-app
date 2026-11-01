@@ -20,11 +20,14 @@ if /i "%~1"=="siec" set "ADRES=0.0.0.0"
 if /i "%~2"=="siec" set "ADRES=0.0.0.0"
 
 rem Logowanie Google dziala tylko pod adresem localhost (Google nie przyjmuje powrotu na adres Tailscale).
-rem Gdy w .streamlit\secrets.toml jest sekcja [auth] (i nie ustawiono OVRLD_LOGOWANIE=0), startujemy tylko lokalnie.
+rem Gdy w .streamlit\secrets.toml jest sekcja [auth] (i nie ustawiono STRUO_LOGOWANIE=0), startujemy tylko lokalnie.
+rem Dawna nazwa zmiennej OVRLD_LOGOWANIE dziala dalej jako zapas.
+set "TRYB_LOG=%STRUO_LOGOWANIE%"
+if not defined TRYB_LOG set "TRYB_LOG=%OVRLD_LOGOWANIE%"
 set "LOGOWANIE="
 if exist ".streamlit\secrets.toml" findstr /i /c:"[auth]" ".streamlit\secrets.toml" >nul && set "LOGOWANIE=1"
-if "%OVRLD_LOGOWANIE%"=="0" set "LOGOWANIE="
-if "%OVRLD_LOGOWANIE%"=="1" set "LOGOWANIE=1"
+if "%TRYB_LOG%"=="0" set "LOGOWANIE="
+if "%TRYB_LOG%"=="1" set "LOGOWANIE=1"
 if defined LOGOWANIE if not "%ADRES%"=="0.0.0.0" set "ADRES=127.0.0.1"
 
 echo.

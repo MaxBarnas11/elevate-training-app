@@ -46,3 +46,8 @@ goscie.txt
 *.db-shm
 
 narzedzia/wynik_*.txt
+
+# Robocze zrzuty wersji bibliotek (tworzą je narzedzia\WERSJE.bat, BIBLIOTEKI.bat i STREAMLIT_AKTUALIZUJ.bat).
+# Obowiązujące wersje są w requirements.txt.
+requirements-przypiete*.txt
+requirements-przed-streamlit.txt

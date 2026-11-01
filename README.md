@@ -101,7 +101,9 @@ Na Windowsie pomaga `START.bat`: uruchamia aplikację i wypisuje adres, który w
 
 Przy pierwszym uruchomieniu powstaje plik bazy `treningi.db` z listą ćwiczeń i gotowymi presetami, które możesz edytować w aplikacji.
 
-Logowanie Google jest opcjonalne i włącza się plikiem `.streamlit/secrets.toml` (klucze klienta OAuth i lista dozwolonych adresów). Pliku z kluczami nie ma w repozytorium.
+Logowanie Google jest opcjonalne i włącza się plikiem `.streamlit/secrets.toml` (klucze klienta OAuth w sekcji `[auth]`, adres właściciela i lista dozwolonych adresów w sekcji `[struo]`). Pliku z kluczami nie ma w repozytorium.
+
+Opcjonalne zmienne środowiskowe: `STRUO_LOGOWANIE` (`1` wymusza logowanie, `0` je wyłącza), `STRUO_WLASCICIEL` i `STRUO_DOZWOLONE` (adresy e-mail rozdzielone przecinkami), `STRUO_BAZA` (ścieżka do osobnego pliku bazy, np. dla konta gościa).
 
 ## Dane i prywatność
 
@@ -118,11 +120,16 @@ Wszystko jest zapisywane lokalnie w `treningi.db` (dla zaproszonych osób w osob
 | `kod/szklo.py`, `motywy.py`, `styl.py` | efekt szkła, kolory motywów |
 | `kod/postepy.py`, `mapa_ciala.py`, `regeneracja.py`, `karty*.py`, `wykresy.py` | strony, karty i wykresy |
 | `kod/baza.py`, `baza_cwiczen.py`, `presety*.py`, `plan.py` | baza SQLite, ponad 850 ćwiczeń, presety, plan tygodnia |
+| `kod/maszyny.py`, `maszyny_ui.py`, `opisy_cwiczen.py` | maszyny na siłowni i filtr sprzętu, podpowiedzi „Jak wykonać” |
 | `kod/rekomendacje.py` | reguły „Na dziś” |
 | `kod/generator.py` | generator „Trening na dziś” (dobór ćwiczeń do partii i czasu) |
 | `kod/logowanie.py`, `uzytkownik.py`, `onboarding.py`, `profil.py` | logowanie Google, konta, pierwsze kroki, profil |
 | `kod/garmin.py`, `powiadomienia.py` | Garmin Connect, powiadomienia ntfy |
 | `narzedzia/` | skrypty pomocnicze: zapis wersji, kopie bazy, sprawdzanie bibliotek, diagnostyka |
+
+## Źródła
+
+Podstawą listy ćwiczeń jest [free-exercise-db](https://github.com/yuhonas/free-exercise-db) (licencja Unlicense, domena publiczna), przetłumaczona na polski i rozszerzona o własne ćwiczenia. Szczegóły w pliku `NOTICE.md`.
 
 ## Plany
 

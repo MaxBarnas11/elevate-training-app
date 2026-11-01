@@ -12,8 +12,9 @@ import pandas as pd
 import uzytkownik
 
 # Plik bazy leży obok tego pliku, niezależnie od tego, skąd uruchomisz aplikację.
-# Zmienna OVRLD_BAZA (pełna ścieżka do pliku .db) uruchamia osobną instancję z własnymi, pustymi danymi (konto gościa, GOSC.bat).
-TRYB_GOSCIA = bool(os.environ.get("OVRLD_BAZA"))
+# Zmienna STRUO_BAZA (pełna ścieżka do pliku .db; dawniej OVRLD_BAZA) uruchamia osobną instancję z własnymi, pustymi danymi
+# (konto gościa, GOSC.bat).
+TRYB_GOSCIA = bool(uzytkownik.env("BAZA"))
 
 
 class _SciezkaBazy(os.PathLike):
@@ -48,7 +49,7 @@ class _SciezkaBazy(os.PathLike):
 
 
 if TRYB_GOSCIA:
-    SCIEZKA_BAZY = Path(os.environ["OVRLD_BAZA"])
+    SCIEZKA_BAZY = Path(uzytkownik.env("BAZA"))
     SCIEZKA_BAZY.parent.mkdir(parents=True, exist_ok=True)
 else:
     SCIEZKA_BAZY = _SciezkaBazy()
@@ -492,4 +493,4 @@ def wczytaj_ostatnie_samopoczucie(ile: int = 5) -> pd.DataFrame:
             "SELECT Zapisano, Tekst, Odpowiedz FROM samopoczucie ORDER BY id DESC LIMIT ?",
             db,
             params=(ile,),
-        )
+        )

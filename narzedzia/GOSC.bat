@@ -15,6 +15,6 @@ if not exist "goscie\%IMIE%" mkdir "goscie\%IMIE%"
 set "ZAPISANY="
 if exist goscie.txt for /f "usebackq tokens=1" %%a in ("goscie.txt") do if /i "%%a"=="%IMIE%" set "ZAPISANY=1"
 if not defined ZAPISANY >>goscie.txt echo %IMIE% %PORT%
-set "OVRLD_BAZA=%CD%\goscie\%IMIE%\treningi.db"
+set "STRUO_BAZA=%CD%\goscie\%IMIE%\treningi.db"
 set "STREAMLIT_SERVER_PORT=%PORT%"
 call START.bat %3

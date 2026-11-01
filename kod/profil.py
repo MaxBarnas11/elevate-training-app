@@ -593,7 +593,7 @@ def _komponent():
         plik = folder / "index.html"
         if not plik.exists() or plik.read_text(encoding="utf-8") != HTML_HERO:
             plik.write_text(HTML_HERO, encoding="utf-8")
-        _KOMPONENT = components.declare_component("ovrld_profil_hero", path=str(folder))
+        _KOMPONENT = components.declare_component("struo_profil_hero", path=str(folder))
     return _KOMPONENT
 
 
@@ -637,7 +637,7 @@ def naglowek_profilu_html(dane: dict | None = None, waga: tuple[float, str] | No
 
 # ---------------------------------------------------------------- teksty: informacja o prywatności i zasady (wersja robocza do przeglądu prawnika)
 
-KONTAKT_ADMINISTRATORA = "ovrld.kontakt@gmail.com"     # np. adres e-mail do spraw danych; puste = „osoba, która udostępniła Ci aplikację”
+KONTAKT_ADMINISTRATORA = "struo.kontakt@gmail.com"     # np. adres e-mail do spraw danych; puste = „osoba, która udostępniła Ci aplikację”
 
 
 def informacja_o_prywatnosci() -> str:
